@@ -54,7 +54,7 @@ async def test_list_changed_refreshes_and_updates_snapshot(make_shield: Any) -> 
         return "1"
 
     async with make_shield({"dyn": dyn}) as (shield, client):
-        before = {t.name for t in (await client.list_tools()).tools}
+        before = {t.name for t in (await client.list_tools()).tools if not t.name.startswith("shield_")}
 
         @dyn.tool()
         def second() -> str:
@@ -62,7 +62,7 @@ async def test_list_changed_refreshes_and_updates_snapshot(make_shield: Any) -> 
             return "2"
 
         await shield.pool._on_list_changed("dyn", "tools")
-        after = {t.name for t in (await client.list_tools()).tools}
+        after = {t.name for t in (await client.list_tools()).tools if not t.name.startswith("shield_")}
     assert before == {"dyn__first"}
     assert after == {"dyn__first", "dyn__second"}
     assert shield.store.scalar("SELECT tool_count FROM upstreams WHERE server_id='dyn'") == 2

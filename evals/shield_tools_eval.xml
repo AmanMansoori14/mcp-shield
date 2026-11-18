@@ -1,0 +1,50 @@
+<!--
+  Evaluation for MCP Shield's read-only shield_* tools (mcp-builder format).
+  Setup: uv run python -m demo.seed_audit evals/eval-audit.db --calls 2000 --seed 42
+         then point Shield's audit.db_path at evals/eval-audit.db.
+  All data is pinned to 2026-11-10 .. 2026-11-16 UTC, so questions use the whole history (since: "all").
+  Questions avoid totals that the agent's own (audited) shield_* calls would change.
+  Answers are checked by tests/integration/test_audit_tools.py::test_eval_answers_are_correct.
+-->
+<evaluation>
+  <qa_pair>
+    <question>Across all recorded history, which prefixed tool name contributed the most estimated response tokens in total?</question>
+    <answer>fs__read_file</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Across all recorded history, which upstream server's tool calls contributed the most estimated tokens in total? Give the server id.</question>
+    <answer>fs</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many times did the security rule for path traversal in tool arguments fire, across all recorded history?</question>
+    <answer>25</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Looking at every audited call to github__merge_pull_request, how many ended with the verdict "denied"?</question>
+    <answer>28</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Looking at every audited call to github__merge_pull_request, how many ended with the verdict "approved"?</question>
+    <answer>52</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>What is the average estimated response size, in tokens, of github__list_prs calls across all recorded history? Round to the nearest whole number.</question>
+    <answer>1436</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Among security rules with severity "high" or above, which rule fired most often across all recorded history?</question>
+    <answer>injection.ignore_previous</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many times was the github__list_prs tool called across all recorded history?</question>
+    <answer>335</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Of the upstream servers notes, github, fs and evil, which one's tool calls contributed the fewest estimated tokens across all recorded history?</question>
+    <answer>evil</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many audited requests have the verdict "warn" across all recorded history?</question>
+    <answer>89</answer>
+  </qa_pair>
+</evaluation>
