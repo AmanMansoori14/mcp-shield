@@ -28,6 +28,7 @@ from mcp_shield.audit.logger import AuditLogger
 from mcp_shield.audit.models import AuditRecord, Finding, TokenRecord
 from mcp_shield.metering.meter import Meter, TokenUsage, canonical_json
 from mcp_shield.pipeline.context import RequestContext
+from mcp_shield.telemetry import annotate_span
 
 log = logging.getLogger(__name__)
 
@@ -202,6 +203,10 @@ class Pipeline:
     # -- audit ---------------------------------------------------------------------
 
     def _submit(self, ctx: RequestContext, usage: TokenUsage, result: Any) -> None:
+        try:
+            annotate_span(ctx, usage)
+        except Exception:  # tracing must never affect the request
+            log.debug("could not annotate span", exc_info=True)
         try:
             params_s, p_trunc = self._payload(ctx.params)
             result_s, r_trunc = self._payload(result)

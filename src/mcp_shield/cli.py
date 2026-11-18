@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -47,14 +48,105 @@ def _load(config: Path):  # type: ignore[no-untyped-def]
 @app.command()
 def run(
     config: ConfigOpt = Path("shield.yaml"),
+    http: Annotated[bool, typer.Option("--http", help="Serve Streamable HTTP instead of stdio")] = False,
+    host: Annotated[str, typer.Option(help="HTTP bind address")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="HTTP port")] = 8765,
     log_level: Annotated[str, typer.Option(help="debug | info | warning")] = "info",
 ) -> None:
-    """Run Shield over stdio (point Claude Desktop / Claude Code at this command)."""
+    """Run Shield over stdio (what MCP hosts launch) or, with --http, as a Streamable HTTP server."""
     _setup_logging(log_level)
     cfg = _load(config)
     from mcp_shield.app import Shield
 
-    anyio.run(Shield.from_config(cfg).serve_stdio)
+    if not http:
+        anyio.run(Shield.from_config(cfg).serve_stdio)
+        return
+    token = os.environ.get("SHIELD_TOKEN", "")
+    if len(token) < 16:
+        typer.secho("Set SHIELD_TOKEN (16+ characters) to run the HTTP server.", fg="red", err=True)
+        raise typer.Exit(2)
+    from mcp_shield.http_face import serve_http
+
+    typer.secho(f"MCP Shield on http://{host}:{port}/mcp (bearer token required)", err=True)
+    anyio.run(
+        lambda: serve_http(Shield.from_config(cfg, connection_kind="http"), token=token, host=host, port=port)
+    )
+
+
+@app.command()
+def dashboard(
+    config: ConfigOpt = Path("shield.yaml"),
+    db: Annotated[Path | None, typer.Option(help="Audit DB (overrides the config)")] = None,
+    port: Annotated[int, typer.Option(help="Dashboard port")] = 8501,
+) -> None:
+    """Open the read-only audit dashboard (Streamlit)."""
+    import subprocess
+
+    path = db if db is not None else _load(config).resolve(_load(config).shield.audit.db_path)
+    app_file = Path(__file__).parent / "dashboard" / "app.py"
+    env = {**os.environ, "SHIELD_DB": str(Path(path).resolve())}
+    raise typer.Exit(
+        subprocess.call(
+            [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                str(app_file),
+                "--server.port",
+                str(port),
+                "--server.address",
+                "127.0.0.1",
+                "--browser.gatherUsageStats",
+                "false",
+                "--server.headless",
+                "true",
+                "--theme.base",
+                "light",
+                "--theme.primaryColor",
+                "#0f766e",
+            ],
+            env=env,
+        )
+    )
+
+
+@app.command()
+def export(
+    config: ConfigOpt = Path("shield.yaml"),
+    since: Annotated[str, typer.Option(help="15m | 1h | 24h | 7d | 30d | all")] = "24h",
+    fmt: Annotated[str, typer.Option("--format", help="csv | json")] = "csv",
+    out: Annotated[Path | None, typer.Option(help="Output file (default: stdout)")] = None,
+    payloads: Annotated[bool, typer.Option(help="Include (redacted) payloads")] = False,
+) -> None:
+    """Export audit rows as evidence. Payloads are opt-in and always redacted."""
+    from mcp_shield.audit.export import export_rows, to_csv, to_json
+    from mcp_shield.audit.queries import Filters, since_iso
+    from mcp_shield.audit.store import AuditStore
+
+    cfg = _load(config)
+    store = AuditStore(cfg.resolve(cfg.shield.audit.db_path), read_only=True)
+    rows = export_rows(store, Filters(since=since_iso(since)), payloads=payloads)
+    text = to_json(rows) if fmt == "json" else to_csv(rows)
+    if out is None:
+        typer.echo(text, nl=False)
+    else:
+        out.write_text(text)
+        typer.echo(f"wrote {len(rows)} rows to {out}", err=True)
+
+
+@app.command()
+def prune(config: ConfigOpt = Path("shield.yaml")) -> None:
+    """Apply audit retention now (delete rows older than audit.retention_days)."""
+    from datetime import UTC, datetime, timedelta
+
+    from mcp_shield.audit.store import AuditStore
+
+    cfg = _load(config)
+    days = cfg.shield.audit.retention_days
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="milliseconds")
+    n = AuditStore(cfg.resolve(cfg.shield.audit.db_path)).delete_older_than(cutoff)
+    typer.echo(f"pruned {n} requests older than {days} days")
 
 
 @app.command()

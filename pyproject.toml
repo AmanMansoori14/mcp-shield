@@ -8,8 +8,10 @@ license = "MIT"
 dependencies = [
     "jsonschema>=4.26.0",
     "mcp>=2,<3",
+    "plotly>=5.24",
     "pydantic>=2.7",
     "pyyaml>=6",
+    "streamlit>=1.40",
     "tiktoken>=0.8",
     "typer>=0.12",
 ]
@@ -25,6 +27,7 @@ build-backend = "uv_build"
 dev = [
     "anyio>=4.16.0",
     "mypy>=2.4.1",
+    "opentelemetry-sdk>=1.27",
     "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.17.5",
@@ -48,7 +51,7 @@ packages = ["mcp_shield"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["tiktoken", "tiktoken.*"]
+module = ["tiktoken", "tiktoken.*", "plotly", "plotly.*", "pandas", "pandas.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

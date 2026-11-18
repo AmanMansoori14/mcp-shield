@@ -25,10 +25,6 @@ This is the execution handoff. Each row is one behavior, small enough to impleme
 ```mermaid
 kanban
   todo[Todo]
-    TS-C1
-    TS-C2
-    TS-C6
-    TS-C8
   in_progress[In Progress]
   review[Review]
     TS-A1
@@ -49,6 +45,15 @@ kanban
     TS-B7
     TS-B8
     TS-B9
+    TS-C1
+    TS-C2
+    TS-C3
+    TS-C4
+    TS-C5
+    TS-C6
+    TS-C7
+    TS-C8
+    TS-C9
 ```
 
 ## 4. Canonical Task Table
@@ -71,15 +76,15 @@ kanban
 | `TS-B7` | W2 | done | A6, B1 | MP-C1, IP-B1 | **problem:** oversized outputs bloat context<br>**goal:** per-call budget warn/truncate with audit pointer | – | S: truncate boundary<br>I: 20k-token result truncated<br>E: – | Given budget 4,000, when a 12k result arrives, then truncated + finding | Truncation message per DG-C1 | Test output |
 | `TS-B8` | W2 | done | B3, B5, B6 | MP-B8 | **problem:** nothing to demo<br>**goal:** benign + poisoned demo servers, attack fixtures, `make demo`, Claude Desktop config | Docker compose | S: –<br>I: demo script asserts expected verdicts<br>E: full demo walkthrough | Given `make demo`, when the script runs, then 1 block, 1 warn+redact, 1 approval | Boots in < 60 s; image includes CA certificates (`httpx2` uses the OS certificate store) | GIF |
 | `TS-B9` | W2 | done | A3, A5 | MP-B3, MP-C7, MP-C9, IP-A16, IP-A17 | **problem:** upstreams can impersonate, mislabel, or silently change tools<br>**goal:** prefix from config id only; tool pinning + rug-pull detection with `on_change` policy; annotations can only tighten | – | S: hashing, prefixing, annotation rules<br>I: `rugpull_server` mutates a description → `tool_changed`; upstream claiming `serverInfo.name="fs"` keeps its own prefix; `readOnlyHint` doesn't skip approval<br>E: rug-pull demo | Given a pinned tool, when its description changes, then the next call needs approval | P6 shows the diff | Test output + GIF |
-| `TS-C1` | W3 | todo | A5, A6 | MP-B7, DG P1 | **problem:** audit not visible<br>**goal:** Streamlit shell + P1 Overview KPIs, time range, health strip | Streamlit, Plotly | S: query layer<br>I: `AppTest` on seeded DB<br>E: manual | Given 5k seeded rows, when opening P1, then it renders in < 2 s | Empty state with commands | Screenshot |
-| `TS-C2` | W3 | todo | C1 | DG P2, P3 | **problem:** can't find/explain a request<br>**goal:** P2 explorer (URL filters, sort by tokens) + P3 detail tabs | Streamlit | S: filter builder<br>I: `AppTest` filter → rows<br>E: manual | Given `verdict=block`, then only blocked rows are listed; click → P3 shows reason | Redacted payload toggle | Screenshot |
-| `TS-C3` | W3 | todo | C1 | DG P4, IP-B1 | **problem:** token spend opaque<br>**goal:** P4 token analytics (by server over time, top tools, schema cost, budget breaches) | Plotly | S: aggregation SQL<br>I: totals equal SQL sum<br>E: manual | Given seeded data, then the top tool equals the SQL max of avg response tokens | "Estimated" caption visible | Screenshot |
-| `TS-C4` | W3 | todo | C1 | DG P5, P6 | **problem:** security posture hidden<br>**goal:** P5 events by rule; P6 upstreams, hidden tools, active policy | Streamlit | S: –<br>I: `AppTest`<br>E: manual | Given the demo run, then P5 shows the description-injection group | Hidden tools listed with reason | Screenshot |
-| `TS-C5` | W3 | todo | A5 | MP-B7 | **problem:** no evidence export<br>**goal:** `shield export` + UI download (CSV/JSON, redacted) | Typer | S: serializer<br>I: export row count = query count<br>E: – | Given a 24 h range, when exporting CSV, then the header has the token columns | Never includes raw payloads | File sample |
-| `TS-C6` | W3 | todo | A3 | MP-B1, MP-C8, IP-A14 | **problem:** remote clients unsupported<br>**goal:** Streamable HTTP face: bearer token, bind `127.0.0.1`, `Origin` + Host allowlist, client token never forwarded | mcp SDK v2 | S: –<br>I: 401 without token; 403 on foreign Origin/Host; upstream header capture shows no client `Authorization`<br>E: – | Given no token, when POST /mcp, then 401 | Works with MCP Inspector on both revisions | Test output |
-| `TS-C8` | W3 | todo | A5, C5 | MP-B7 | **problem:** the agent can't ask about its own audit<br>**goal:** optional read-only `shield_list_requests`, `shield_get_token_usage`, `shield_list_security_events` (mcp-builder conventions) + 10-question evaluation XML | mcp SDK v2 | S: pagination, formats<br>I: `outputSchema` validated; cursor and `has_more`<br>E: evaluation run | Given the seeded DB, when asked for the top tool by response tokens, then the tool name matches SQL | `readOnlyHint: true`; `limit` default 20 / max 100; markdown + json formats | Eval report |
-| `TS-C9` | W3 | todo | A7 | MP-B9 | **problem:** Shield decisions are invisible to tracing tools<br>**goal:** add verdict, rule IDs, tokens and upstream attributes to the SDK's built-in OpenTelemetry spans | opentelemetry-sdk | S: attribute builder<br>I: in-memory span exporter shows attributes on `tools/call` spans<br>E: – | Given an OTLP exporter, when a call is blocked, then its span has `shield.verdict=block` | No cost when no exporter is configured | Test output |
-| `TS-C7` | W3 | todo | all | MP success markers | **problem:** project not recruiter-ready<br>**goal:** README (GIF, architecture, quickstart, security notes, precision/recall), retention job, coverage ≥ 85% on core | – | S: coverage gate<br>I: –<br>E: fresh-machine demo | Given a new laptop, when following README, then the demo works in < 5 min | All success markers measured | README link |
+| `TS-C1` | W3 | done | A5, A6 | MP-B7, DG P1 | **problem:** audit not visible<br>**goal:** Streamlit shell + P1 Overview KPIs, time range, health strip | Streamlit, Plotly | S: query layer<br>I: `AppTest` on seeded DB<br>E: manual | Given 5k seeded rows, when opening P1, then it renders in < 2 s | Empty state with commands | Screenshot |
+| `TS-C2` | W3 | done | C1 | DG P2, P3 | **problem:** can't find/explain a request<br>**goal:** P2 explorer (URL filters, sort by tokens) + P3 detail tabs | Streamlit | S: filter builder<br>I: `AppTest` filter → rows<br>E: manual | Given `verdict=block`, then only blocked rows are listed; click → P3 shows reason | Redacted payload toggle | Screenshot |
+| `TS-C3` | W3 | done | C1 | DG P4, IP-B1 | **problem:** token spend opaque<br>**goal:** P4 token analytics (by server over time, top tools, schema cost, budget breaches) | Plotly | S: aggregation SQL<br>I: totals equal SQL sum<br>E: manual | Given seeded data, then the top tool equals the SQL max of avg response tokens | "Estimated" caption visible | Screenshot |
+| `TS-C4` | W3 | done | C1 | DG P5, P6 | **problem:** security posture hidden<br>**goal:** P5 events by rule; P6 upstreams, hidden tools, active policy | Streamlit | S: –<br>I: `AppTest`<br>E: manual | Given the demo run, then P5 shows the description-injection group | Hidden tools listed with reason | Screenshot |
+| `TS-C5` | W3 | done | A5 | MP-B7 | **problem:** no evidence export<br>**goal:** `shield export` + UI download (CSV/JSON, redacted) | Typer | S: serializer<br>I: export row count = query count<br>E: – | Given a 24 h range, when exporting CSV, then the header has the token columns | Never includes raw payloads | File sample |
+| `TS-C6` | W3 | done | A3 | MP-B1, MP-C8, IP-A14 | **problem:** remote clients unsupported<br>**goal:** Streamable HTTP face: bearer token, bind `127.0.0.1`, `Origin` + Host allowlist, client token never forwarded | mcp SDK v2 | S: –<br>I: 401 without token; 403 on foreign Origin/Host; upstream header capture shows no client `Authorization`<br>E: – | Given no token, when POST /mcp, then 401 | Works with MCP Inspector on both revisions | Test output |
+| `TS-C8` | W3 | done | A5, C5 | MP-B7 | **problem:** the agent can't ask about its own audit<br>**goal:** optional read-only `shield_list_requests`, `shield_get_token_usage`, `shield_list_security_events` (mcp-builder conventions) + 10-question evaluation XML | mcp SDK v2 | S: pagination, formats<br>I: `outputSchema` validated; cursor and `has_more`<br>E: evaluation run | Given the seeded DB, when asked for the top tool by response tokens, then the tool name matches SQL | `readOnlyHint: true`; `limit` default 20 / max 100; markdown + json formats | Eval report |
+| `TS-C9` | W3 | done | A7 | MP-B9 | **problem:** Shield decisions are invisible to tracing tools<br>**goal:** add verdict, rule IDs, tokens and upstream attributes to the SDK's built-in OpenTelemetry spans | opentelemetry-sdk | S: attribute builder<br>I: in-memory span exporter shows attributes on `tools/call` spans<br>E: – | Given an OTLP exporter, when a call is blocked, then its span has `shield.verdict=block` | No cost when no exporter is configured | Test output |
+| `TS-C7` | W3 | done | all | MP success markers | **problem:** project not recruiter-ready<br>**goal:** README (GIF, architecture, quickstart, security notes, precision/recall), retention job, coverage ≥ 85% on core | – | S: coverage gate<br>I: –<br>E: fresh-machine demo | Given a new laptop, when following README, then the demo works in < 5 min | All success markers measured | README link |
 
 ## 5. Expanded Task Detail
 
@@ -147,6 +152,24 @@ notes: The default seal key is per process, which is fine for v1 (one process). 
 | `TS-B7` | Budget stage: `warn` finding, or `truncate` text to fit with a notice naming the request ID | `test_context_budget_warns`, `test_context_budget_truncates` |
 | `TS-B8` | `demo/poisoned_server.py` (poisoned description, hidden Unicode, result injection + AWS key, destructive tool, oversized output), `demo/rugpull_server.py`, attack fixtures, `make demo` run over real stdio with security events in `shield stats` | `README.md` (real output) |
 | `TS-B9` | SHA-256 definition pins persisted in `tool_pins`; changed tools flagged, re-scanned and gated by `pinning.on_change`; one approval accepts the new definition; poisoned descriptions hidden; prefixes from config ids only | `src/mcp_shield/security/pins.py`, `test_benign_definition_change_requires_one_approval`, `test_rug_pull_needs_approval_then_is_accepted` |
+
+| `TS-C1` | Streamlit shell + P1 Overview: KPIs (requests, blocked %, estimated tokens and cost, p95 Shield overhead), requests over time by status, upstream health, latest high-severity events, empty state | `src/mcp_shield/dashboard/pages.py`, `docs/assets/dashboard-overview.png`, `test_dashboard_pages_render` |
+| `TS-C2` | P2 explorer (range in URL, server/verdict/search filters, sort by tokens or latency, row → detail) and P3 detail (reason, IDs, latency split, tokens, findings, redacted payload, policy, approval legs) | `docs/assets/dashboard-detail.png`, `test_request_detail_and_missing`, `test_requests_filters` |
+| `TS-C3` | P4 token analytics: tokens over time by server, top tools by response tokens (colored by server), per-turn tool-definition cost, budget breaches; "estimated" caption | `docs/assets/dashboard-tokens.png` |
+| `TS-C4` | P5 security events by rule with severity filter; P6 servers, tool pins (pinned / changed / hidden) and the active policy | `test_dashboard_pages_render[page_security]`, `[page_upstreams]` |
+| `TS-C5` | `shield export` (CSV/JSON, paged, payloads opt-in and redacted) and the dashboard "Prepare export" button; one shared query layer for dashboard, CLI and tools | `src/mcp_shield/audit/queries.py`, `src/mcp_shield/audit/export.py`, `tests/unit/test_queries_export.py` |
+| `TS-C6` | `shield run --http`: constant-time bearer check (16+ chars), Host/Origin allowlists, `127.0.0.1` default; legacy HTTP connections keyed by `Mcp-Session-Id`, 2026-07-28 traffic grouped by client + token hash; a real HTTP upstream test proves the client token is never forwarded | `src/mcp_shield/http_face.py`, `tests/integration/test_http.py` |
+| `TS-C7` | README with dashboard screenshots, agent-tools and CLI sections; hourly retention + `shield prune`; coverage gate (`--cov-fail-under=85`, currently 91%) in `make cov` and CI | `README.md`, `test_retention_prunes_old_rows` |
+| `TS-C8` | `shield_list_requests`, `shield_get_token_usage`, `shield_list_security_events`: read-only annotations, pagination, markdown/json, `outputSchema`, actionable errors, audit flushed before reads; 10-question evaluation with an answer key checked in CI | `src/mcp_shield/proxy/audit_tools.py`, `evals/shield_tools_eval.xml`, `tests/integration/test_audit_tools.py` |
+| `TS-C9` | Verdict, rule IDs, token counts, logical call ID and a `shield.denied` event added to the SDK's span for every message; verified with an in-memory span exporter | `src/mcp_shield/telemetry.py`, `test_spans_carry_shield_decision` |
+
+### Wave 3 implementation notes (deviations from the PRD)
+
+- **README GIF:** the README uses static dashboard screenshots instead of an animated GIF. The real `make demo` output is quoted as text.
+- **Dashboard tables in screenshots:** Streamlit draws tables on a canvas that the headless browser doesn't paint, so the screenshots show the chart pages and the request detail. Table pages are covered by `AppTest`.
+- **OpenTelemetry export** is left to the operator: Shield adds attributes to the SDK's spans but doesn't configure an exporter.
+- **HTTP auth** is a static bearer token (`SHIELD_TOKEN`), as planned for v1; OAuth is not implemented.
+- **Evaluation** avoids questions about totals that the agent's own (audited) `shield_*` calls would change.
 
 ### Wave 2 implementation notes (deviations from the PRD)
 

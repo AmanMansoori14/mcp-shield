@@ -14,7 +14,9 @@ Pass-through matrix (IP-A11):
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 import weakref
 from typing import Any
 
@@ -30,6 +32,7 @@ from mcp_shield.metering.meter import TokenUsage
 from mcp_shield.pipeline.context import RequestContext
 from mcp_shield.pipeline.pipeline import Pipeline
 from mcp_shield.proxy import router
+from mcp_shield.proxy.audit_tools import AuditTools
 from mcp_shield.proxy.upstream_pool import UpstreamPool
 from mcp_shield.security.approval import Approver
 from mcp_shield.security.pins import ToolGuard
@@ -44,43 +47,87 @@ INSTRUCTIONS = (
 
 
 class ConnectionTracker:
-    """Maps live server sessions to audit ``connection`` rows (MP-C Connection).
+    """Maps requests to audit ``connection`` rows (MP-C Connection).
 
-    stdio and legacy HTTP sessions are one connection per session object. Grouping of
-    2026-07-28 HTTP traffic by client info + token arrives with the HTTP face (TS-C6).
+    * ``stdio`` / ``in_process``: one connection per session object.
+    * ``http``: legacy (2025-11-25) traffic is one connection per ``Mcp-Session-Id`` session;
+      2026-07-28 traffic has no session, so it is *grouped* by client info + a hash of the
+      bearer token, with a 30-minute idle window. Grouping is a heuristic for display only.
     """
 
-    def __init__(self, kind: ConnectionKind):
-        self.kind = kind
+    GROUP_IDLE_S = 1800.0
+
+    def __init__(self, mode: str):
+        self.mode = mode
         self._by_session: weakref.WeakKeyDictionary[Any, ConnectionRecord] = weakref.WeakKeyDictionary()
+        self._groups: dict[tuple[str, ...], tuple[ConnectionRecord, float]] = {}
 
     def for_request(self, ctx: ServerRequestContext[Any]) -> ConnectionRecord:
-        rec = self._by_session.get(ctx.session)
         name, version = _client_info(ctx)
+        if self.mode == "http" and str(ctx.protocol_version) >= "2026-07-28":
+            return self._grouped(ctx, name, version)
+        if self.mode == "http":
+            # SDK v2 hands out a fresh session object per HTTP request; the header is the stable key.
+            headers = getattr(ctx.request, "headers", None)
+            sid = headers.get("mcp-session-id") if headers is not None else None
+            if sid:
+                key = ("legacy", sid)
+                hit = self._groups.get(key)
+                legacy = self._touch(hit[0] if hit else None, ctx, "legacy_session", name, version)
+                self._groups[key] = (legacy, time.monotonic())
+                return legacy
+        kind: ConnectionKind = "legacy_session" if self.mode == "http" else self.mode  # type: ignore[assignment]
+        rec = self._by_session.get(ctx.session)
+        rec = self._touch(rec, ctx, kind, name, version)
+        self._by_session[ctx.session] = rec
+        return rec
+
+    def _grouped(
+        self, ctx: ServerRequestContext[Any], name: str | None, version: str | None
+    ) -> ConnectionRecord:
+        key = ("grouped", name or "", version or "", _principal(ctx))
+        now = time.monotonic()
+        hit = self._groups.get(key)
+        rec = hit[0] if hit and now - hit[1] < self.GROUP_IDLE_S else None
+        rec = self._touch(rec, ctx, "grouped", name, version)
+        self._groups[key] = (rec, now)
+        return rec
+
+    @staticmethod
+    def _touch(
+        rec: ConnectionRecord | None,
+        ctx: ServerRequestContext[Any],
+        kind: ConnectionKind,
+        name: str | None,
+        version: str | None,
+    ) -> ConnectionRecord:
         if rec is None:
             caps = ctx.session.client_capabilities
-            rec = ConnectionRecord(
+            return ConnectionRecord(
                 id=new_id("c"),
-                kind=self.kind,
+                kind=kind,
                 client_name=name,
                 client_version=version,
                 protocol_version=ctx.protocol_version,
                 capabilities=caps.model_dump(mode="json", exclude_none=True) if caps else None,
             )
-            self._by_session[ctx.session] = rec
-        else:
-            rec = rec.model_copy(
-                update={
-                    "last_seen_at": now_iso(),
-                    "client_name": rec.client_name or name,
-                    "client_version": rec.client_version or version,
-                }
-            )
-            self._by_session[ctx.session] = rec
-        return rec
+        return rec.model_copy(
+            update={
+                "last_seen_at": now_iso(),
+                "client_name": rec.client_name or name,
+                "client_version": rec.client_version or version,
+            }
+        )
 
     def sessions(self) -> list[Any]:
         return list(self._by_session.keys())
+
+
+def _principal(ctx: ServerRequestContext[Any]) -> str:
+    """A short hash of the caller's bearer token (never the token itself)."""
+    headers = getattr(ctx.request, "headers", None)
+    auth = headers.get("authorization", "") if headers is not None else ""
+    return hashlib.sha256(auth.encode()).hexdigest()[:12] if auth else ""
 
 
 def build_server(
@@ -90,6 +137,7 @@ def build_server(
     *,
     guard: ToolGuard | None = None,
     approver: Approver | None = None,
+    audit_tools: AuditTools | None = None,
 ) -> Server[Any]:
     meter = pipeline.meter
 
@@ -118,6 +166,8 @@ def build_server(
                 for sid, t in pool.all_tools()
                 if guard is None or not guard.is_hidden(sid, t.name)  # poisoned tools are hidden (MP-B3)
             ]
+            if audit_tools is not None:
+                tools.extend(audit_tools.tools.values())
             if guard is not None:
                 for f in guard.listing_findings():
                     rctx.add_finding(f)
@@ -134,6 +184,17 @@ def build_server(
     async def on_call_tool(
         ctx: ServerRequestContext[Any], params: types.CallToolRequestParams
     ) -> types.CallToolResult | types.InputRequiredResult:
+        if audit_tools is not None and params.name in audit_tools.tools:
+            # Shield's own read-only audit tools still go through the pipeline (policy, audit, tokens).
+            actx = new_ctx(ctx, "tools/call", params)
+            actx.server_id, actx.tool, actx.upstream_tool = "shield", params.name, params.name
+            actx.input_schema = audit_tools.tools[params.name].input_schema
+            local_args = params.arguments or {}
+
+            async def local() -> types.CallToolResult:
+                return await audit_tools.call(params.name, local_args)
+
+            return await pipeline.call_tool(actx, local)
         parts = router.split(params.name)
         up = pool.get(parts[0]) if parts else None
         if parts is None or up is None or (up.client is not None and parts[1] not in up.tools):

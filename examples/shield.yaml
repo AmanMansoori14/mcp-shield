@@ -3,6 +3,9 @@ servers: servers.yaml
 policy: policy.yaml
 pricing: pricing.yaml
 
+audit_tools: true        # expose read-only shield_* tools to the agent
+refresh_interval_s: 30   # re-list upstreams to catch changed tool definitions
+
 audit:
   db_path: shield-audit.db
   spool_path: shield-audit.spool.jsonl

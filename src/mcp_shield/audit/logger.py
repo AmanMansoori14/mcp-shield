@@ -34,11 +34,15 @@ class AuditLogger:
         self._spool_lock = threading.Lock()
         self.written = 0
         self.spooled = 0
+        self._queued = 0  # records accepted into the buffer
+        self._drained = 0  # records the drain task has finished with (written or spooled)
+        self._progress: anyio.Event | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
     async def start(self, tg: TaskGroup) -> None:
         await anyio.to_thread.run_sync(self.backfill)
+        self._progress = anyio.Event()
         self._send, self._recv = anyio.create_memory_object_stream[AuditRecord](self.queue_size)
         tg.start_soon(self._drain, self._recv)
 
@@ -56,6 +60,7 @@ class AuditLogger:
             return
         try:
             self._send.send_nowait(rec)
+            self._queued += 1
         except (anyio.WouldBlock, anyio.ClosedResourceError, anyio.BrokenResourceError):
             self._spool(rec)
 
@@ -70,6 +75,20 @@ class AuditLogger:
                 except Exception as e:
                     log.warning("audit write failed (%s); spooling %s", e, rec.id)
                     self._spool(rec)
+                finally:
+                    self._drained += 1
+                    if self._progress is not None:
+                        self._progress.set()
+                        self._progress = anyio.Event()
+
+    async def flush(self, timeout_s: float = 2.0) -> bool:
+        """Wait until everything submitted so far is persisted (read-your-writes for audit queries)."""
+        target = self._queued
+        with anyio.move_on_after(timeout_s):
+            while self._drained < target and self._progress is not None:
+                await self._progress.wait()
+            return True
+        return False
 
     def _spool(self, rec: AuditRecord) -> None:
         line = rec.model_dump_json() + "\n"

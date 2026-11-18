@@ -10,8 +10,8 @@ Every tool call your agent makes is routed, checked, metered and audited, with i
 ![SDK](https://img.shields.io/badge/mcp%20SDK-v2-0f766e)
 ![mypy](https://img.shields.io/badge/mypy-strict-2a6db2)
 ![ruff](https://img.shields.io/badge/lint-ruff-d7ff64)
-![tests](https://img.shields.io/badge/tests-148%20passing-success)
-![coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)
+![tests](https://img.shields.io/badge/tests-185%20passing-success)
+![coverage](https://img.shields.io/badge/coverage-91%25-brightgreen)
 
 </div>
 
@@ -31,7 +31,7 @@ MCP Shield sits between any MCP client (Claude Desktop, Claude Code, Cursor, MCP
 
 The **request path** (top row) runs every call through policy, argument checks and approval before routing it upstream. The **response path** (second row) validates, scans, redacts and budgets the result before the model sees it. Every stage reports to the **token meter** and the **async audit logger**, which writes one row per JSON-RPC request to SQLite.
 
-> Waves 1 and 2 (this release) ship everything in the diagram except the Streamlit dashboard, OpenTelemetry attributes and the HTTP face, which arrive in wave 3. See the [roadmap](#roadmap).
+> Everything in the diagram ships today: waves 1 to 3 of the PRD are implemented. See the [roadmap](#roadmap) for what is deliberately left out.
 
 ### One tool call, end to end
 
@@ -91,6 +91,30 @@ flowchart LR
 | **Context budget** | Warns about, or truncates, tool outputs over a token budget | warn at 4,000 |
 
 Scanner quality on the bundled fixtures (`tests/fixtures/`): **12 / 12 attacks caught, 0 / 50 benign samples flagged.**
+
+## Audit dashboard
+
+`shield dashboard -c shield.yaml` opens a read-only Streamlit console on the audit DB (bound to `127.0.0.1`). Filters live in the URL, so a reviewer can share an exact view. `make seed` builds a 2,000-call demo DB and opens the dashboard on it.
+
+![Overview: KPIs, requests over time by status, upstream health and the latest security events](docs/assets/dashboard-overview.png)
+
+| Token analytics | Request detail |
+|---|---|
+| ![Tokens over time by server, top tools by response tokens, and the per-turn cost of each server's tool definitions](docs/assets/dashboard-tokens.png) | ![One request: verdict, reason, IDs, latency split, with tabs for tokens, findings, redacted payload, policy and approval legs](docs/assets/dashboard-detail.png) |
+
+Pages: **Overview** · **Requests** (filter, sort by tokens or latency, open a request, export the view) · **Token analytics** · **Security events** · **Upstreams & policy** (server health, tool pins with `changed`/`hidden` status, the active policy). Colors follow a validated palette: one color per server everywhere, and status colors (allowed / warned / pending / blocked) are always paired with an icon and a label.
+
+## Ask the agent about its own audit
+
+Shield also exposes three **read-only** tools, so you can ask Claude *"which tool used the most context today?"* or *"what did you get blocked on?"*:
+
+| Tool | What it returns |
+|---|---|
+| `shield_list_requests` | Audited requests (filter by server, tool, verdict; sort by newest, tokens or latency), paginated with `cursor` / `has_more` |
+| `shield_get_token_usage` | Estimated tokens grouped by tool, server, connection or method |
+| `shield_list_security_events` | Findings grouped by rule, most severe first |
+
+They follow the mcp-builder conventions (read-only annotations, `outputSchema` + `structuredContent`, `response_format: markdown | json`, errors that say what to try next). They see the agent's own latest calls (the audit is flushed before each read), and they are audited too, under the `shield` server. [`evals/shield_tools_eval.xml`](evals/shield_tools_eval.xml) holds 10 evaluation questions with an answer key that the test suite checks against the tools.
 
 ## Token usage, the headline feature
 
@@ -220,9 +244,15 @@ servers.yaml:2: servers.0: Input tag 'carrier-pigeon' found using 'transport' do
 | Command | What it does |
 |---|---|
 | `shield run -c shield.yaml` | Serve over stdio (what MCP hosts launch) |
+| `SHIELD_TOKEN=… shield run --http -c shield.yaml` | Serve Streamable HTTP on `127.0.0.1:8765/mcp`: bearer token, Host/Origin allowlists, both protocol revisions |
+| `shield dashboard -c shield.yaml` | Open the read-only audit dashboard |
+| `shield stats -c shield.yaml` | Totals, top tools by tokens, security events, latest requests |
+| `shield export -c shield.yaml --since 7d --format csv` | Evidence export (CSV or JSON; `--payloads` adds redacted payloads) |
+| `shield prune -c shield.yaml` | Apply audit retention now (it also runs hourly while Shield is up) |
 | `shield check -c shield.yaml` | Validate all config files; exit code 2 on errors |
-| `shield stats -c shield.yaml` | Totals, top tools by tokens, latest requests |
 | `shield schema` | Export JSON Schemas for the config files |
+
+**Tracing:** Shield adds its decision to the SDK's OpenTelemetry span for every message (`shield.verdict`, `shield.rule_ids`, `shield.tokens.*`, `shield.logical_call_id`, plus a `shield.denied` event). Install an OpenTelemetry SDK and exporter in the process to ship them to Jaeger, Grafana Tempo, Langfuse or similar; without one they cost nothing.
 
 ## Protocol support
 
@@ -247,7 +277,7 @@ flowchart LR
     subgraph W2["✅ Wave 2 · Security"]
         B1[Policy engine<br/>+ hot reload] --> B3[Injection scanner<br/>+ redactor] --> B6[Approvals<br/>multi-round-trip] --> B9[Tool pinning<br/>rug-pulls + demo]
     end
-    subgraph W3["⏳ Wave 3 · Visibility"]
+    subgraph W3["✅ Wave 3 · Visibility"]
         C1[Streamlit<br/>dashboard] --> C6[HTTP face, OTel,<br/>shield_* tools] --> C7[README GIF,<br/>retention, polish]
     end
     W1 --> W2 --> W3
@@ -257,7 +287,9 @@ flowchart LR
 |---|---|---|
 | **1 · Foundation** | TS-A1 repo/CI · TS-A2 config · TS-A3 proxy · TS-A4 pass-through · TS-A5 audit · TS-A6 token meter · TS-A7 pipeline | ✅ Done (A1 awaits its first CI run) |
 | **2 · Security** | TS-B1 policy · TS-B2 hot reload · TS-B3 scanner · TS-B5 redactor · TS-B6 approvals · TS-B7 budget · TS-B8 demo · TS-B9 pinning | ✅ Done (TS-B4 classifier: hook only) |
-| **3 · Visibility** | Dashboard, export, HTTP face, OpenTelemetry attributes, `shield_*` audit tools | ⏳ Next |
+| **3 · Visibility** | TS-C1–C4 dashboard · TS-C5 export · TS-C6 HTTP face · TS-C7 README, retention, coverage gate · TS-C8 `shield_*` tools + eval · TS-C9 OpenTelemetry | ✅ Done |
+
+Deliberately not in v1 (see the PRD non-goals): hosted multi-tenant SaaS, SSO/RBAC on the dashboard, OAuth on the HTTP face (static bearer token instead), relaying upstream sampling/elicitation, and a bundled ML classifier.
 
 ## Project layout
 
@@ -265,11 +297,14 @@ flowchart LR
 src/mcp_shield/
   config.py            typed YAML config, env expansion, line-numbered errors
   app.py               wiring: meter → audit → upstream pool → pipeline → server
-  cli.py               `shield` command (run · check · stats · schema)
+  cli.py               `shield` command (run · dashboard · stats · export · prune · check · schema)
+  http_face.py         Streamable HTTP: bearer auth + DNS-rebinding protection
+  telemetry.py         Shield attributes on the SDK's OpenTelemetry spans
   proxy/
     server_face.py     low-level SDK v2 Server: what clients connect to
     upstream_pool.py   one SDK Client per upstream, isolated, refusing back-channel requests
     router.py          {config_id}__name namespacing + upstream definition checks
+    audit_tools.py     read-only shield_* MCP tools
   pipeline/
     pipeline.py        ordered stages, fail-closed, denials as is_error results
     context.py         per-request state + stage timers
@@ -281,8 +316,10 @@ src/mcp_shield/
     pins.py            tool pinning, rug-pull detection, hidden tools
     stages.py          the pipeline stages built from the above
   metering/            tokenizers + meter (request / response / schema tokens)
-  audit/               SQLite store, migrations, async logger with JSONL spool
-demo/                  demo upstreams (benign, poisoned, rug-pull, misbehaving) and the stdio driver
+  audit/               SQLite store, migrations, async logger with JSONL spool, queries, export
+  dashboard/           Streamlit pages (overview, requests, tokens, security, upstreams)
+demo/                  demo upstreams (benign, poisoned, rug-pull, misbehaving), the stdio driver, the audit seeder
+evals/                 evaluation questions for the shield_* tools (mcp-builder format)
 tests/                 unit + integration (in-memory SDK client, both protocol revisions)
 docs/prd/              the full PRD set (Markdown + PDF + architecture diagram)
 ```
@@ -291,7 +328,7 @@ docs/prd/              the full PRD set (Markdown + PDF + architecture diagram)
 
 ```bash
 make check    # ruff lint + format check, mypy --strict, pytest
-make cov      # tests with coverage
+make cov      # tests with coverage (fails under 85%)
 make format   # auto-format
 ```
 

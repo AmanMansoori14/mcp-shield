@@ -14,3 +14,4 @@ schemas/
 *.db-shm
 *.spool.jsonl
 .env
+demo-audit.db*

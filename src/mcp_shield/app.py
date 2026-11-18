@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -13,13 +14,14 @@ import anyio.to_thread
 from mcp.server import Server
 
 from mcp_shield.audit.logger import AuditLogger
-from mcp_shield.audit.models import ConnectionKind, UpstreamSnapshot
+from mcp_shield.audit.models import UpstreamSnapshot
 from mcp_shield.audit.store import AuditStore
 from mcp_shield.config import LoadedConfig, PolicyFile
 from mcp_shield.metering.meter import Meter
 from mcp_shield.metering.tokenizer import Tokenizer, make_tokenizer
 from mcp_shield.pipeline.pipeline import Pipeline
 from mcp_shield.proxy import router
+from mcp_shield.proxy.audit_tools import AuditTools
 from mcp_shield.proxy.server_face import ConnectionTracker, build_server, notify_list_changed
 from mcp_shield.proxy.upstream_pool import Upstream, UpstreamPool
 from mcp_shield.security.approval import Approver
@@ -55,7 +57,9 @@ class Shield:
         input_price_per_million: float | None = None,
         queue_size: int = 10_000,
         store_payloads: bool = True,
-        connection_kind: ConnectionKind = "stdio",
+        connection_kind: str = "stdio",
+        audit_tools: bool = True,
+        retention_days: int | None = 30,
         refresh_interval_s: float = 30.0,
         policy_reload_interval_s: float = 1.0,
     ):
@@ -98,15 +102,21 @@ class Shield:
                 BudgetStage(self.meter, self.holder),
             ],
         )
+        self.retention_days = retention_days
         self.server: Server[Any] = build_server(
-            self.pool, self.pipeline, self.tracker, guard=self.guard, approver=self.approver
+            self.pool,
+            self.pipeline,
+            self.tracker,
+            guard=self.guard,
+            approver=self.approver,
+            audit_tools=AuditTools(self.store, self.audit.flush) if audit_tools else None,
         )
         self.refresh_interval_s = refresh_interval_s
         self.policy_reload_interval_s = policy_reload_interval_s
         self._stop = anyio.Event()
 
     @classmethod
-    def from_config(cls, cfg: LoadedConfig, *, connection_kind: ConnectionKind = "stdio") -> Shield:
+    def from_config(cls, cfg: LoadedConfig, *, connection_kind: str = "stdio") -> Shield:
         pool = UpstreamPool.from_config(cfg.servers.servers)
         return cls(
             list(pool.upstreams.values()),
@@ -121,6 +131,8 @@ class Shield:
             queue_size=cfg.shield.audit.queue_size,
             store_payloads=cfg.shield.audit.store_payloads,
             connection_kind=connection_kind,
+            audit_tools=cfg.shield.audit_tools,
+            retention_days=cfg.shield.audit.retention_days,
             refresh_interval_s=cfg.shield.refresh_interval_s,
             policy_reload_interval_s=cfg.shield.policy_reload_interval_s,
         )
@@ -138,6 +150,9 @@ class Shield:
             await self.snapshot_upstreams()
             tg.start_soon(self._every, self.policy_reload_interval_s, self._reload_policy)
             tg.start_soon(self._every, self.refresh_interval_s, self.refresh_upstreams)
+            if self.retention_days:
+                await self.prune()
+                tg.start_soon(self._every, 3600.0, self.prune)
             try:
                 yield self
             finally:
@@ -201,6 +216,16 @@ class Shield:
                 last_error=up.last_error,
             )
             await anyio.to_thread.run_sync(self.store.write_upstream, snap)
+
+    async def prune(self) -> int:
+        """Retention: drop audit rows older than ``retention_days`` (tokens and findings cascade)."""
+        if not self.retention_days:
+            return 0
+        cutoff = (datetime.now(UTC) - timedelta(days=self.retention_days)).isoformat(timespec="milliseconds")
+        n = await anyio.to_thread.run_sync(self.store.delete_older_than, cutoff)
+        if n:
+            log.info("retention: pruned %d audit rows older than %d days", n, self.retention_days)
+        return int(n)
 
     async def _on_upstream_change(self, server_id: str, kind: str) -> None:
         await self.screen_tools()

@@ -207,6 +207,7 @@ class ShieldFile(_Strict):
     audit: AuditSettings = Field(default_factory=AuditSettings)
     tokenizer: TokenizerSettings = Field(default_factory=TokenizerSettings)
     refresh_interval_s: float = Field(default=30.0, ge=1)  # re-list upstreams (rug-pull detection)
+    audit_tools: bool = True  # expose read-only shield_* tools to the agent
     policy_reload_interval_s: float = Field(default=1.0, gt=0)
 
 
