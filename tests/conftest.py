@@ -49,7 +49,6 @@ def make_shield(tmp_path: Path) -> ShieldFactory:
             spool_path=tmp_path / "audit.spool.jsonl",
             tokenizer=kwargs.pop("tokenizer", CharHeuristicTokenizer()),
             connection_kind="in_process",
-            policy_hash="p_test",
             **kwargs,
         )
         async with shield.running(), Client(shield.server, mode=mode) as client:  # type: ignore[arg-type]

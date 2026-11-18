@@ -78,16 +78,18 @@ async def test_stage_timings_and_connection_are_recorded(make_shield: Any, mode:
     conn = shield.store.query("SELECT * FROM connections")[0]
     assert conn["kind"] == "in_process" and conn["protocol_version"] == negotiated
     assert conn["client_name"] is not None
-    assert row["policy_hash"] == "p_test" and row["shield_version"] == "0.1.0"
+    assert row["policy_hash"].startswith("p_") and row["shield_version"] == "0.1.0"
 
 
-async def test_payloads_are_not_stored_until_redaction_exists(make_shield: Any) -> None:
+async def test_payloads_are_stored_only_after_redaction(make_shield: Any) -> None:
     async with make_shield({"notes": notes}) as (shield, client):
-        await client.call_tool("notes__echo", {"text": "AKIAIOSFODNN7EXAMPLE"})
+        await client.call_tool("notes__echo", {"text": "key AKIAIOSFODNN7EXAMPLE"})
     row = shield.store.query(
         "SELECT params_redacted, result_redacted FROM requests WHERE method='tools/call'"
     )[0]
-    assert row == {"params_redacted": None, "result_redacted": None}  # MP-C3
+    assert "AKIAIOSFODNN7EXAMPLE" not in row["params_redacted"]  # MP-C3: never raw on disk
+    assert "AKIAIOSFODNN7EXAMPLE" not in row["result_redacted"]
+    assert "[REDACTED:aws_access_key]" in row["params_redacted"]
 
 
 async def test_internal_failure_fails_closed(make_shield: Any) -> None:

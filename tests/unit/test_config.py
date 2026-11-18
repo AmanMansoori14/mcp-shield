@@ -167,4 +167,4 @@ def test_json_schemas_export() -> None:
 def test_examples_directory_is_valid() -> None:
     root = Path(__file__).resolve().parents[2] / "examples"
     cfg = load_config(root / "shield.yaml", env={})
-    assert [s.id for s in cfg.servers.servers] == ["notes"]
+    assert [s.id for s in cfg.servers.servers] == ["notes", "evil"]
