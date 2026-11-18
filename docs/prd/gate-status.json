@@ -1,0 +1,8 @@
+{
+  "project": "mcp-shield",
+  "template": "Weihan96/PRD-templates/template/v4",
+  "gates": {
+    "gate1": { "status": "pending_review", "updated": "2026-11-18" },
+    "gate2": { "status": "draft", "updated": "2026-11-18" }
+  }
+}

@@ -1,0 +1,147 @@
+# Tasks — MCP Shield
+
+This is the execution handoff. Each row is one behavior, small enough to implement, review and verify in one pass. Test shorthand: `S:` static or unit, `I:` integration or protocol, `E:` end-to-end or manual demo.
+
+## 1. Status Legend
+
+| Status | Meaning |
+|---|---|
+| `todo` | Ready to start |
+| `in_progress` | Being implemented |
+| `blocked` | Waiting on decision/dependency |
+| `review` | Needs review/verification |
+| `done` | Acceptance met, evidence attached |
+
+## 2. Suggested Batching
+
+| Wave | Purpose | Contents | Est. |
+|---|---|---|---|
+| `W1` | Foundation | Repo, config models, proxy pass-through, audit store + token meter | Week 1 |
+| `W2` | Security value | Policy, scanner, redactor, approval, demo servers | Week 2 |
+| `W3` | Visibility & polish | Dashboard pages, export, hardening, README/demo | Week 3 |
+
+## 3. Backlog Status View
+
+```mermaid
+kanban
+  todo[Todo]
+    TS-B1
+    TS-B3
+    TS-B5
+    TS-B6
+  in_progress[In Progress]
+  review[Review]
+    TS-A1
+  blocked[Blocked]
+  done[Done]
+    TS-A2
+    TS-A3
+    TS-A4
+    TS-A5
+    TS-A6
+    TS-A7
+```
+
+## 4. Canonical Task Table
+
+| Ref | Wave | Status | Depends on | Source refs | Change | Stacks | Tests | Smoke | Acceptance | Evidence |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `TS-A1` | W1 | review | – | MP-A5 | **problem:** no repo<br>**goal:** uv project, ruff/mypy/pytest, CI, Makefile | uv, GH Actions | S: lint, types<br>I: –<br>E: – | Given a fresh clone, when `make check`, then all checks pass | CI green; badge in README | CI run link |
+| `TS-A2` | W1 | done | A1 | MP-B1, IP config | **problem:** no typed config<br>**goal:** Pydantic models + loader for servers/policy/shield YAML with line-numbered errors | Pydantic, PyYAML | S: unit valid/invalid<br>I: –<br>E: – | Given a bad `transport`, when loading, then error cites line 4 | Env var `${}` expansion works; JSON Schema exported | Test output |
+| `TS-A3` | W1 | done | A2 | MP-B1, IP-A1, IP-A2, IP-A12 | **problem:** no proxy<br>**goal:** low-level `Server` (SDK v2) serving both protocol revisions; aggregate list/call across N upstreams with `{config_id}__tool` names; validate upstream tools and arguments (IP-A13) | mcp SDK v2, anyio | S: router unit<br>I: in-memory modern + `mode="legacy"` client ↔ Shield ↔ 2 upstreams; malformed upstream tool dropped<br>E: Claude Desktop smoke | Given `fs` and `demo`, when `tools/list`, then `fs__read_file` and `demo__echo` appear | list/call for tools, resources, prompts; upstream errors mapped | Test + screenshot |
+| `TS-A4` | W1 | done | A3 | IP-A11 | **problem:** notifications dropped<br>**goal:** implement the IP-A11 matrix: forward progress, cancelled and change notifications; answer legacy `ping` locally; refuse upstream sampling, elicitation and roots requests | mcp SDK v2 | S: –<br>I: protocol tests per message type, on both revisions<br>E: – | Given an upstream sends `sampling/createMessage`, then it gets an error and a `backchannel_refused` finding is recorded | Pass-through matrix in docs is fully green | Test output |
+| `TS-A5` | W1 | done | A2 | MP-B6, MP-C2, IP-A5, IP-A10 | **problem:** no audit<br>**goal:** SQLite schema (connections, requests with `logical_call_id` + `protocol_version`, token_usage, findings, policy_versions, upstreams, tool_pins) + migrations, async queue logger, JSONL spool + back-fill | SQLModel, SQLite | S: record builder<br>I: 1,000 mixed requests → 1,000 rows; DB locked → spool → back-fill<br>E: – | Given DB is read-only, when 10 requests, then 10 spool lines and 10 rows after restart | Zero dropped records; WAL mode | Count assertion |
+| `TS-A6` | W1 | done | A5 | MP-C1, IP-B1 | **problem:** token cost unknown<br>**goal:** `Tokenizer` protocol (tiktoken, provider, char/4) + meter for request (once per logical call), response (content only) and schema (per-turn snapshot) tokens + pricing | tiktoken | S: counts for text/image/structured<br>I: calibration vs provider (skip without key)<br>E: – | Given a 1,000-word result, when metered, then `response_tokens` ≈ 1,300 ± 10% | Every row has `tokenizer` + `estimated=true`; >32 KB counted off-loop | Calibration report |
+| `TS-A7` | W1 | done | A3, A5, A6 | MP-B6 | **problem:** pipeline stages not wired<br>**goal:** `RequestContext` + ordered pipeline (IP steps 1–13) with latency per stage | – | S: stage order unit<br>I: every request audited incl. errors<br>E: – | Given an upstream timeout, then the audit row has verdict `error` + latency | p95 overhead ≤ 25 ms on echo bench | Bench output |
+| `TS-B1` | W2 | todo | A7 | MP-B2 | **problem:** no access control<br>**goal:** policy engine: match server/tool globs, arg rules, rate limits, `require_approval`, worst-of verdict | – | S: rule matching table tests; clock-injected rate limit<br>I: deny over protocol<br>E: – | Given `deny-write-outside-sandbox`, when writing `/etc/passwd`, then block with rule ID | Policy hash stored per row | pytest report |
+| `TS-B2` | W2 | todo | B1 | MP-B2, J5 | **problem:** restart to change policy<br>**goal:** file watcher hot reload, atomic swap, invalid = keep old; `shield check-policy` | watchfiles, Typer | S: –<br>I: invalid YAML keeps old hash<br>E: – | Given a policy edit, when saved, then the next request carries the new hash | `policy_versions` appended | Test output |
+| `TS-B3` | W2 | todo | A7 | MP-B3 | **problem:** poisoned descriptions reach the model<br>**goal:** heuristic rule pack for descriptions + results (ignore-previous, exfil instructions, hidden unicode/zero-width, markdown image exfil, tool shadowing) | – | S: positive + negative per rule<br>I: 12 attack fixtures + 50 benign<br>E: – | Given an `evil` description, when `tools/list`, then the tool is hidden and a finding recorded | ≥ 12/12 attacks caught; ≤ 2/50 benign flagged | Precision/recall table |
+| `TS-B4` | W2 | todo | B3 | MP-B3 | **problem:** heuristics miss paraphrases<br>**goal:** optional ONNX classifier stage behind config flag | onnxruntime | S: threshold logic<br>I: fixtures with classifier on<br>E: – | Given classifier enabled, when paraphrased injection, then warn | Off by default; adds ≤ 15 ms p95 | Bench + test |
+| `TS-B5` | W2 | todo | A7 | MP-B4, MP-C3 | **problem:** secrets leak into context/logs<br>**goal:** redactor for API keys, JWT, private keys, AWS, email, phone; runs before response + audit | detect-secrets patterns | S: rule tests<br>I: grep audit DB for raw fixtures = 0 hits<br>E: – | Given a result with `AKIA…`, then client + DB see `[REDACTED:aws_key]` | No raw secret in DB | Test output |
+| `TS-B6` | W2 | todo | B1, A5 | MP-B5, IP pipeline step 5 | **problem:** destructive calls run unattended<br>**goal:** approval via `Resolve` + `Elicit` (multi-round-trip on 2026-07-28, live elicitation on legacy); sealed `request_state` with args hash and 5 min expiry; both legs linked by `logical_call_id` | mcp SDK v2 | S: seal/verify, expiry, args mismatch<br>I: modern + legacy client accept/decline/no-capability; tampered state rejected<br>E: Claude Desktop dialog | Given `merge_pull_request`, when the user declines, then leg 2 has verdict `denied` and nothing reaches upstream | 2 rows, 1 `logical_call_id`; args counted once; `approval_ms` recorded | Screen recording |
+| `TS-B7` | W2 | todo | A6, B1 | MP-C1, IP-B1 | **problem:** oversized outputs bloat context<br>**goal:** per-call budget warn/truncate with audit pointer | – | S: truncate boundary<br>I: 20k-token result truncated<br>E: – | Given budget 4,000, when a 12k result arrives, then truncated + finding | Truncation message per DG-C1 | Test output |
+| `TS-B8` | W2 | todo | B3, B5, B6 | MP-B8 | **problem:** nothing to demo<br>**goal:** benign + poisoned demo servers, attack fixtures, `make demo`, Claude Desktop config | Docker compose | S: –<br>I: demo script asserts expected verdicts<br>E: full demo walkthrough | Given `make demo`, when the script runs, then 1 block, 1 warn+redact, 1 approval | Boots in < 60 s; image includes CA certificates (`httpx2` uses the OS certificate store) | GIF |
+| `TS-B9` | W2 | todo | A3, A5 | MP-B3, MP-C7, MP-C9, IP-A16, IP-A17 | **problem:** upstreams can impersonate, mislabel, or silently change tools<br>**goal:** prefix from config id only; tool pinning + rug-pull detection with `on_change` policy; annotations can only tighten | – | S: hashing, prefixing, annotation rules<br>I: `rugpull_server` mutates a description → `tool_changed`; upstream claiming `serverInfo.name="fs"` keeps its own prefix; `readOnlyHint` doesn't skip approval<br>E: rug-pull demo | Given a pinned tool, when its description changes, then the next call needs approval | P6 shows the diff | Test output + GIF |
+| `TS-C1` | W3 | todo | A5, A6 | MP-B7, DG P1 | **problem:** audit not visible<br>**goal:** Streamlit shell + P1 Overview KPIs, time range, health strip | Streamlit, Plotly | S: query layer<br>I: `AppTest` on seeded DB<br>E: manual | Given 5k seeded rows, when opening P1, then it renders in < 2 s | Empty state with commands | Screenshot |
+| `TS-C2` | W3 | todo | C1 | DG P2, P3 | **problem:** can't find/explain a request<br>**goal:** P2 explorer (URL filters, sort by tokens) + P3 detail tabs | Streamlit | S: filter builder<br>I: `AppTest` filter → rows<br>E: manual | Given `verdict=block`, then only blocked rows are listed; click → P3 shows reason | Redacted payload toggle | Screenshot |
+| `TS-C3` | W3 | todo | C1 | DG P4, IP-B1 | **problem:** token spend opaque<br>**goal:** P4 token analytics (by server over time, top tools, schema cost, budget breaches) | Plotly | S: aggregation SQL<br>I: totals equal SQL sum<br>E: manual | Given seeded data, then the top tool equals the SQL max of avg response tokens | "Estimated" caption visible | Screenshot |
+| `TS-C4` | W3 | todo | C1 | DG P5, P6 | **problem:** security posture hidden<br>**goal:** P5 events by rule; P6 upstreams, hidden tools, active policy | Streamlit | S: –<br>I: `AppTest`<br>E: manual | Given the demo run, then P5 shows the description-injection group | Hidden tools listed with reason | Screenshot |
+| `TS-C5` | W3 | todo | A5 | MP-B7 | **problem:** no evidence export<br>**goal:** `shield export` + UI download (CSV/JSON, redacted) | Typer | S: serializer<br>I: export row count = query count<br>E: – | Given a 24 h range, when exporting CSV, then the header has the token columns | Never includes raw payloads | File sample |
+| `TS-C6` | W3 | todo | A3 | MP-B1, MP-C8, IP-A14 | **problem:** remote clients unsupported<br>**goal:** Streamable HTTP face: bearer token, bind `127.0.0.1`, `Origin` + Host allowlist, client token never forwarded | mcp SDK v2 | S: –<br>I: 401 without token; 403 on foreign Origin/Host; upstream header capture shows no client `Authorization`<br>E: – | Given no token, when POST /mcp, then 401 | Works with MCP Inspector on both revisions | Test output |
+| `TS-C8` | W3 | todo | A5, C5 | MP-B7 | **problem:** the agent can't ask about its own audit<br>**goal:** optional read-only `shield_list_requests`, `shield_get_token_usage`, `shield_list_security_events` (mcp-builder conventions) + 10-question evaluation XML | mcp SDK v2 | S: pagination, formats<br>I: `outputSchema` validated; cursor and `has_more`<br>E: evaluation run | Given the seeded DB, when asked for the top tool by response tokens, then the tool name matches SQL | `readOnlyHint: true`; `limit` default 20 / max 100; markdown + json formats | Eval report |
+| `TS-C9` | W3 | todo | A7 | MP-B9 | **problem:** Shield decisions are invisible to tracing tools<br>**goal:** add verdict, rule IDs, tokens and upstream attributes to the SDK's built-in OpenTelemetry spans | opentelemetry-sdk | S: attribute builder<br>I: in-memory span exporter shows attributes on `tools/call` spans<br>E: – | Given an OTLP exporter, when a call is blocked, then its span has `shield.verdict=block` | No cost when no exporter is configured | Test output |
+| `TS-C7` | W3 | todo | all | MP success markers | **problem:** project not recruiter-ready<br>**goal:** README (GIF, architecture, quickstart, security notes, precision/recall), retention job, coverage ≥ 85% on core | – | S: coverage gate<br>I: –<br>E: fresh-machine demo | Given a new laptop, when following README, then the demo works in < 5 min | All success markers measured | README link |
+
+## 5. Expanded Task Detail
+
+### `TS-A3` Proxy spike & aggregation
+
+```md
+task_ref: TS-A3
+source_refs: MP-B1, IP-A1, IP-A2, IP-A11, IP-A12
+problem: Shield must be server-to-client and client-to-N-upstreams at once without losing protocol fidelity
+goal: Working aggregation for tools/resources/prompts with namespaced names
+stacks_used: mcp SDK, anyio
+test_plan: S: router unit; I: in-memory transports (client ↔ shield ↔ 2 upstreams); E: Claude Desktop
+smoke_example: Given fs + demo upstreams, when tools/list, then fs__read_file and demo__echo appear
+acceptance_criteria: list/call parity on both protocol revisions; denials as is_error results; one upstream down or malformed does not break others
+depends_on: TS-A2
+notes: Decided: low-level Server (SDK v2). MCPServer (formerly FastMCP) doesn't suit dynamic tool lists, and SDK middleware is provisional (timing only). Remember v2 does not validate arguments but does validate outgoing results.
+```
+
+### `TS-A6` Token meter
+
+```md
+task_ref: TS-A6
+source_refs: MP-B6, MP-C1, MP-C6, IP-B1
+problem: Nobody knows how many context tokens each MCP server/tool costs
+goal: Accurate (±10%) per-request token usage persisted with every audit row
+test_plan: S: text/image/structuredContent counting; I: calibration vs provider count_tokens (skipped w/o key)
+smoke_example: Given tools/list from fs (12 tools), then schema_tokens > 0 and stored per server in upstreams
+acceptance_criteria: tokenizer pluggable; fallback flagged; >32 KB payloads counted in a thread
+depends_on: TS-A5
+```
+
+### `TS-B6` Multi-round-trip approval
+
+```md
+task_ref: TS-B6
+source_refs: MP-B5, IP pipeline step 5, UJ-C4, DG-C1
+problem: 2026-07-28 removes server-to-client requests, so approval can't be a push-and-wait
+goal: One approval implementation that works for modern (InputRequiredResult + retry) and legacy (live elicitation) clients
+stacks_used: mcp SDK v2 (Resolve, Elicit, RequestStateSecurity)
+test_plan: S: seal/verify/expiry; I: both client modes x accept/decline/no-capability/tamper; E: Claude Desktop
+smoke_example: Given a modern client, when it calls merge_pull_request and approves, then two rows share one logical_call_id and the upstream is called once
+acceptance_criteria: expired or tampered state never forwards; args counted once; approval_ms recorded
+depends_on: TS-B1, TS-A5
+notes: The default seal key is per process, which is fine for v1 (one process). Configure keys before running several HTTP workers.
+```
+
+## 6. Evidence Log
+
+| Ref | Evidence summary | Location |
+|---|---|---|
+| `TS-A1` | uv project, ruff (lint + format), mypy `--strict`, pytest, `make check` green locally. CI workflow written; stays in `review` until the first GitHub Actions run | `Makefile`, `.github/workflows/ci.yml` |
+| `TS-A2` | Pydantic models for shield/servers/policy/pricing YAML; `${VAR}` / `${VAR:-default}` expansion; errors cite `file:line`; JSON Schema export (`shield schema`); `shield check` exits 2 on errors | `src/mcp_shield/config.py`, `tests/unit/test_config.py` |
+| `TS-A3` | Low-level SDK v2 `Server` serving 2026-07-28 and legacy clients; `{config_id}__tool` namespacing; argument validation against upstream schemas; per-upstream isolation (down, degraded, unexposable names dropped). Every integration test runs on both protocol revisions | `src/mcp_shield/proxy/`, `tests/integration/test_proxy.py` |
+| `TS-A4` | Progress relayed upstream → client; `ping` answered locally; upstream elicitation refused and recorded as `passthrough.backchannel_refused`; list-changed → refresh + snapshot + downstream notification; real stdio subprocess upstream | `tests/integration/test_passthrough.py` |
+| `TS-A5` | SQLite WAL schema + migrations; async bounded queue; JSONL spool on full queue or DB failure; idempotent back-fill; retention cascade | `src/mcp_shield/audit/`, `tests/unit/test_audit.py` |
+| `TS-A6` | `Tokenizer` protocol (tiktoken `o200k_base`, char/4 fallback); request (args), response (content only, no structured double count), schema (definitions) tokens; payloads ≥ 32 KB counted off the event loop; estimated cost from `pricing.yaml` | `src/mcp_shield/metering/`, `tests/unit/test_meter.py` |
+| `TS-A7` | Ordered pipeline with pre/post stage hooks; per-stage timings; worst-of verdicts; fail-closed on internal errors; 1,000 mixed requests → 1,000 audit rows; p95 overhead < 25 ms asserted | `src/mcp_shield/pipeline/`, `tests/integration/test_audit_pipeline.py` |
+
+### Wave 1 implementation notes (deviations from the PRD)
+
+- **Audit store uses stdlib `sqlite3`** with plain-SQL migrations instead of SQLModel. Fewer moving parts; the schema matches IP Section 4.
+- **IP-A13, schema-invalid tools:** SDK v2 refuses to send *and* to receive a listing that contains an invalid tool schema, so such an upstream is marked `degraded` as a whole (others are unaffected). Per-tool dropping applies to names Shield can't re-expose (too long once prefixed, or invalid characters).
+- **Provider `count_tokens` adapter** is deferred to the calibration work (TS-C7). tiktoken and the char fallback are implemented; every row records its tokenizer.
+- **Payload storage is off** (`params_redacted`/`result_redacted` stay `NULL`) until the redactor lands in TS-B5, so raw secrets can't reach disk (MP-C3).
+- **List-changed from 2026-07-28 upstreams** needs a `subscriptions/listen` stream; wave 1 handles legacy notifications. Modern change detection comes with tool pinning (TS-B9).
+- **HTTP upstreams** are supported in config and the pool (own credentials only, MP-C8) but have no integration test yet; the HTTP face (TS-C6) will add one.
+
+## 7. Gate Check Before Execution
+
+- [x] Every task cites upstream PRD refs.
+- [x] No task introduces new scope or an unapproved stack. (`watchfiles`, `onnxruntime` and `opentelemetry-sdk` are small libraries inside approved capabilities and are noted for Gate 1 review.)
+- [x] Each row has a test plan and a smoke example.
+- [x] Acceptance criteria are measurable.
+- [x] Tasks are grouped only for order.
