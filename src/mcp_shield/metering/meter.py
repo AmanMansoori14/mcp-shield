@@ -61,7 +61,8 @@ class Meter:
     async def count_text(self, text: str) -> int:
         if not text:
             return 0
-        if len(text) >= self.offload_bytes:
+        # Large payloads, and remote tokenizers (network calls), never block the event loop.
+        if len(text) >= self.offload_bytes or getattr(self.tokenizer, "remote", False):
             return await anyio.to_thread.run_sync(self.tokenizer.count, text)
         return self.tokenizer.count(text)
 

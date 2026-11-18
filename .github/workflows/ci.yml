@@ -14,7 +14,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install
-        run: uv sync --locked
+        run: uv sync --locked --all-extras
       - name: Lint
         run: |
           uv run ruff check .
@@ -23,3 +23,14 @@ jobs:
         run: uv run mypy
       - name: Tests (2026-07-28 + legacy 2025-11-25 clients)
         run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
+
+  docker:
+    # Builds the image and runs the full attack walkthrough in containers (TS-B8).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run the compose demo
+        run: docker compose up --build --exit-code-from demo demo
+      - name: Show Shield logs on failure
+        if: failure()
+        run: docker compose logs shield

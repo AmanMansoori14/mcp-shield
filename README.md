@@ -10,8 +10,12 @@ Every tool call your agent makes is routed, checked, metered and audited, with i
 ![SDK](https://img.shields.io/badge/mcp%20SDK-v2-0f766e)
 ![mypy](https://img.shields.io/badge/mypy-strict-2a6db2)
 ![ruff](https://img.shields.io/badge/lint-ruff-d7ff64)
-![tests](https://img.shields.io/badge/tests-194%20passing-success)
+![tests](https://img.shields.io/badge/tests-211%20passing-success)
 ![coverage](https://img.shields.io/badge/coverage-91%25-brightgreen)
+
+![A real demo run: poisoned tools hidden, an injection flagged and a leaked key masked, path traversal and schema violations blocked, a destructive call approved, then the audit summary with token counts and security events](docs/assets/demo.gif)
+
+<sub>Recorded from a real `make demo` run with `make gif` · [text of the run](docs/assets/demo-output.txt)</sub>
 
 </div>
 
@@ -127,7 +131,15 @@ MCP messages don't carry LLM usage, so Shield meters what it *can* see and contr
 | `schema_tokens` | Name + description + schemas of listed tools | A standing cost on **every** model turn, per server |
 | `est_cost_usd` | Total × your input price from `pricing.yaml` | Optional; always labelled an estimate |
 
-Counts use `tiktoken` (`o200k_base`) offline, fall back to a len/4 heuristic, and every row records which tokenizer produced it.
+Every row records which tokenizer produced its count. Three choices (`tokenizer.kind` in `shield.yaml`):
+
+| Kind | Accuracy | Needs |
+|---|---|---|
+| `anthropic` | Exact Claude counts from the `count_tokens` endpoint, cached by content hash. On API errors it falls back to the offline estimate (an auth error switches it off; other errors pause it for 30 s) | `uv sync --extra claude` plus `ant auth login` or `ANTHROPIC_API_KEY` |
+| `tiktoken` (default) | Offline and fast, but it is not Claude's tokenizer and reads low, typically 15-20%. Set `tokenizer.scale` to the factor `shield calibrate` measures | nothing |
+| `char` | len/4, the last-resort fallback | nothing |
+
+`shield calibrate` (or `make calibrate`) counts a corpus of MCP-shaped payloads (prose, JSON arguments, tool definitions, logs, code, tables, non-English text) with both tokenizers and prints the scale factor that brings the offline estimate within the PRD's ±10% target.
 
 ## Quickstart
 
@@ -142,6 +154,15 @@ uv run shield check --config examples/shield.yaml
 # 3. Drive Shield the way an MCP host does (stdio subprocess), then read the audit
 make demo
 ```
+
+Or run everything in containers: Shield over Streamable HTTP, the dashboard, and an MCP client that runs the walkthrough:
+
+```bash
+docker compose up --build --exit-code-from demo demo   # the walkthrough, then exits
+docker compose up -d dashboard                         # http://127.0.0.1:8501
+```
+
+Ports are published on `127.0.0.1` only, the container runs as an unprivileged user, and audit data lives on the `shield-data` volume. Set `SHIELD_TOKEN` in `.env` for anything beyond a demo.
 
 Real output from `make demo`. The example config connects a benign server (`notes`) and a deliberately malicious one (`evil`):
 
@@ -249,6 +270,7 @@ servers.yaml:2: servers.0: Input tag 'carrier-pigeon' found using 'transport' do
 | `shield stats -c shield.yaml` | Totals, top tools by tokens, security events, latest requests |
 | `shield export -c shield.yaml --since 7d --format csv` | Evidence export (CSV or JSON; `--payloads` adds redacted payloads) |
 | `shield prune -c shield.yaml` | Apply audit retention now (it also runs hourly while Shield is up) |
+| `shield calibrate` | Measure the offline token estimate against Claude's `count_tokens` and print `tokenizer.scale` |
 | `shield check -c shield.yaml` | Validate all config files; exit code 2 on errors |
 | `shield schema` | Export JSON Schemas for the config files |
 
@@ -300,6 +322,7 @@ src/mcp_shield/
   cli.py               `shield` command (run · dashboard · stats · export · prune · check · schema)
   http_face.py         Streamable HTTP: bearer auth + DNS-rebinding protection
   telemetry.py         Shield attributes on the SDK's OpenTelemetry spans
+  healthcheck.py       container health check (401 from the HTTP face = up, auth enforced)
   proxy/
     server_face.py     low-level SDK v2 Server: what clients connect to
     upstream_pool.py   one SDK Client per upstream, isolated, refusing back-channel requests
@@ -315,11 +338,13 @@ src/mcp_shield/
     approval.py        multi-round-trip and legacy approvals
     pins.py            tool pinning, rug-pull detection, hidden tools
     stages.py          the pipeline stages built from the above
-  metering/            tokenizers + meter (request / response / schema tokens)
+  metering/            tokenizers (Claude count_tokens, tiktoken, char), calibration, meter
   audit/               SQLite store, migrations, async logger with JSONL spool, queries, export
   dashboard/           Streamlit pages (overview, requests, tokens, security, upstreams)
 demo/                  demo upstreams (benign, poisoned, rug-pull, misbehaving), the stdio driver, the audit seeder
 evals/                 evaluation questions for the shield_* tools (mcp-builder format)
+scripts/               make_demo_gif.py: records docs/assets/demo.gif from a real run
+Dockerfile, docker-compose.yml   container image and the three-service demo
 tests/                 unit + integration (in-memory SDK client, both protocol revisions)
 docs/prd/              the full PRD set (Markdown + PDF + architecture diagram)
 ```

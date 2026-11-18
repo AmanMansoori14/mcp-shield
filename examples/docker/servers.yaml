@@ -1,0 +1,12 @@
+# Upstreams inside the container: plain `python -m` (the venv is already on PATH).
+servers:
+  - id: notes
+    transport: stdio
+    command: ["python", "-m", "demo.benign_server"]
+    timeout_s: 30
+
+  # DEMO ONLY: a deliberately malicious server so you can watch Shield block it.
+  - id: evil
+    transport: stdio
+    command: ["python", "-m", "demo.poisoned_server"]
+    timeout_s: 30

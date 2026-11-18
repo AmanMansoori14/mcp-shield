@@ -14,6 +14,7 @@ import typer
 
 from mcp_shield import __version__
 from mcp_shield.config import ConfigError, json_schemas, load_config
+from mcp_shield.metering.tokenizer import Tokenizer
 
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, help="MCP Shield: security gateway for MCP servers."
@@ -51,6 +52,9 @@ def run(
     http: Annotated[bool, typer.Option("--http", help="Serve Streamable HTTP instead of stdio")] = False,
     host: Annotated[str, typer.Option(help="HTTP bind address")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="HTTP port")] = 8765,
+    allow_host: Annotated[
+        list[str] | None, typer.Option(help="Extra allowed Host header, e.g. shield:8765 (repeatable)")
+    ] = None,
     log_level: Annotated[str, typer.Option(help="debug | info | warning")] = "info",
 ) -> None:
     """Run Shield over stdio (what MCP hosts launch) or, with --http, as a Streamable HTTP server."""
@@ -68,9 +72,8 @@ def run(
     from mcp_shield.http_face import serve_http
 
     typer.secho(f"MCP Shield on http://{host}:{port}/mcp (bearer token required)", err=True)
-    anyio.run(
-        lambda: serve_http(Shield.from_config(cfg, connection_kind="http"), token=token, host=host, port=port)
-    )
+    shield = Shield.from_config(cfg, connection_kind="http")
+    anyio.run(lambda: serve_http(shield, token=token, host=host, port=port, extra_hosts=allow_host or []))
 
 
 @app.command()
@@ -78,6 +81,9 @@ def dashboard(
     config: ConfigOpt = Path("shield.yaml"),
     db: Annotated[Path | None, typer.Option(help="Audit DB (overrides the config)")] = None,
     port: Annotated[int, typer.Option(help="Dashboard port")] = 8501,
+    address: Annotated[
+        str, typer.Option(help="Bind address (0.0.0.0 only inside a container)")
+    ] = "127.0.0.1",
 ) -> None:
     """Open the read-only audit dashboard (Streamlit)."""
     import subprocess
@@ -96,7 +102,7 @@ def dashboard(
                 "--server.port",
                 str(port),
                 "--server.address",
-                "127.0.0.1",
+                address,
                 "--browser.gatherUsageStats",
                 "false",
                 "--server.headless",
@@ -216,6 +222,58 @@ def stats(
         typer.echo(f"    {r['created_at'][11:23]}  {r['method']:<16} {r['tool']:<28} ", nl=False)
         typer.secho(f"{r['verdict']:<16}", fg=colour, nl=False)
         typer.echo(f" {r['tok']:>7,} tok {r['ms']:>8.1f} ms")
+
+
+@app.command()
+def calibrate(
+    model: Annotated[
+        str, typer.Option(help="Claude model whose tokenizer is the reference")
+    ] = "claude-opus-5-5",
+    encoding: Annotated[str, typer.Option(help="Offline tiktoken encoding to calibrate")] = "o200k_base",
+) -> None:
+    """Measure the offline estimate against Claude's count_tokens and print the scale factor (needs credentials)."""
+    from mcp_shield.metering.calibrate import calibrate as run_calibration
+    from mcp_shield.metering.tokenizer import AnthropicTokenizer, TiktokenTokenizer
+
+    try:
+        reference = _reference_tokenizer(model)
+    except Exception as e:
+        typer.secho(f"Cannot reach Claude's count_tokens: {e}", fg="red", err=True)
+        typer.echo(
+            "Install the extra (uv sync --extra claude) and sign in with `ant auth login`, "
+            "or export ANTHROPIC_API_KEY.",
+            err=True,
+        )
+        raise typer.Exit(2) from e
+    report = run_calibration(reference, TiktokenTokenizer(encoding))
+    if isinstance(reference, AnthropicTokenizer) and reference.fallbacks:
+        typer.secho(
+            f"{reference.fallbacks} count_tokens call(s) failed; the result is not valid.", fg="red", err=True
+        )
+        raise typer.Exit(1)
+    typer.secho(f"Reference {report.reference} · estimator {report.estimator}", bold=True)
+    typer.echo(f"{'sample':<16} {'claude':>8} {'estimate':>9} {'error':>8} {'scaled':>8} {'error':>8}")
+    for s in report.samples:
+        typer.echo(
+            f"{s.label:<16} {s.reference:>8,} {s.estimate:>9,} {s.error_before:>+8.1%} "
+            f"{s.scaled:>8,} {s.error_after:>+8.1%}"
+        )
+    typer.echo(
+        f"\nworst error: {report.worst_before:.1%} unscaled → {report.worst_after:.1%} with scale {report.scale}"
+    )
+    ok = report.within_10pct
+    typer.secho(
+        f"{'✓' if ok else '✗'} PRD target ±10%: {'met' if ok else 'not met'}", fg="green" if ok else "red"
+    )
+    typer.echo(f"\nAdd to shield.yaml:\n  tokenizer:\n    kind: tiktoken\n    scale: {report.scale}")
+
+
+def _reference_tokenizer(model: str) -> Tokenizer:
+    from mcp_shield.metering.tokenizer import AnthropicTokenizer
+
+    tok = AnthropicTokenizer(model)
+    tok.overhead()  # one real call: fails fast without credentials
+    return tok
 
 
 @app.command()

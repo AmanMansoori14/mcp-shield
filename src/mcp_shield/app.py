@@ -132,7 +132,12 @@ class Shield:
             spool_path=cfg.resolve(cfg.shield.audit.spool_path),
             policy=cfg.policy,
             policy_path=cfg.resolve(cfg.shield.policy) if cfg.shield.policy else None,
-            tokenizer=make_tokenizer(cfg.shield.tokenizer.kind, cfg.shield.tokenizer.encoding),
+            tokenizer=make_tokenizer(
+                cfg.shield.tokenizer.kind,
+                cfg.shield.tokenizer.encoding,
+                scale=cfg.shield.tokenizer.scale,
+                model=cfg.shield.tokenizer.model,
+            ),
             image_tokens=cfg.shield.tokenizer.image_tokens,
             offload_bytes=cfg.shield.tokenizer.offload_bytes,
             input_price_per_million=cfg.pricing.input_per_million if cfg.pricing else None,

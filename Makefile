@@ -1,9 +1,9 @@
 # MCP Shield developer tasks. Requires uv: https://docs.astral.sh/uv/
 UV ?= uv
-.PHONY: install check lint format typecheck test cov run http dashboard seed stats demo clean
+.PHONY: install check lint format typecheck test cov run http dashboard seed stats demo docker-demo calibrate gif clean
 
-install:            ## Create the venv and install dependencies
-	$(UV) sync
+install:            ## Create the venv and install dependencies (with the optional Claude tokenizer)
+	$(UV) sync --all-extras
 
 check: lint typecheck test   ## Everything CI runs
 
@@ -44,6 +44,16 @@ stats:              ## Summarise the example audit DB
 demo:               ## Drive Shield like an MCP client would, then print the audit
 	$(UV) run python -m demo.drive examples/shield.yaml
 	$(UV) run shield stats --config examples/shield.yaml
+
+docker-demo:        ## Build the image and run the attack walkthrough in containers (dashboard on 127.0.0.1:8501)
+	docker compose up --build --exit-code-from demo demo
+	@echo "Dashboard: docker compose up -d dashboard  ->  http://127.0.0.1:8501"
+
+calibrate:          ## Measure tiktoken against Claude's tokenizer (needs ANTHROPIC_API_KEY or ant auth login)
+	$(UV) run --extra claude shield calibrate
+
+gif:                ## Re-record docs/assets/demo.gif from a fresh `make demo` run
+	$(UV) run python scripts/make_demo_gif.py
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage examples/shield-audit.db* examples/*.spool.jsonl demo-audit.db*

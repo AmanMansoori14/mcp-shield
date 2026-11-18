@@ -1,0 +1,39 @@
+# One-command demo (TS-B8):  docker compose up --build --abort-on-container-exit demo
+#   shield     MCP Shield over Streamable HTTP (bearer token, Host/Origin allowlists)
+#   dashboard  the read-only audit dashboard on the same volume
+#   demo       an MCP client that runs the attack walkthrough against shield, then exits
+# Ports are published on 127.0.0.1 only. Change SHIELD_TOKEN in .env for anything but a demo.
+
+x-shield-image: &image
+  build: .
+  image: mcp-shield:local
+
+services:
+  shield:
+    <<: *image
+    command: ["shield", "run", "--http", "--host", "0.0.0.0", "--allow-host", "shield:8765",
+              "--config", "examples/docker/shield.yaml"]
+    environment:
+      SHIELD_TOKEN: ${SHIELD_TOKEN:-demo-token-change-me-0123456789}
+    volumes: ["shield-data:/data"]
+    ports: ["127.0.0.1:8765:8765"]
+
+  dashboard:
+    <<: *image
+    command: ["shield", "dashboard", "--config", "examples/docker/shield.yaml", "--address", "0.0.0.0"]
+    volumes: ["shield-data:/data"]
+    ports: ["127.0.0.1:8501:8501"]
+    depends_on:
+      shield: {condition: service_healthy}
+
+  demo:
+    <<: *image
+    command: ["python", "-m", "demo.drive", "http://shield:8765/mcp"]
+    environment:
+      SHIELD_TOKEN: ${SHIELD_TOKEN:-demo-token-change-me-0123456789}
+    depends_on:
+      shield: {condition: service_healthy}
+    restart: "no"
+
+volumes:
+  shield-data:

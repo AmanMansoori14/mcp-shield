@@ -1,0 +1,14 @@
+# Shield settings for the container. Audit data goes to the /data volume.
+servers: servers.yaml
+policy: ../policy.yaml
+pricing: ../pricing.yaml
+audit_tools: true
+
+audit:
+  db_path: ${SHIELD_DATA:-/data}/shield-audit.db
+  spool_path: ${SHIELD_DATA:-/data}/shield-audit.spool.jsonl
+  retention_days: 30
+
+tokenizer:
+  kind: tiktoken
+  encoding: o200k_base

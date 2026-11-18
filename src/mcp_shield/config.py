@@ -185,8 +185,10 @@ class PolicyFile(_Strict):
 
 
 class TokenizerSettings(_Strict):
-    kind: Literal["tiktoken", "char"] = "tiktoken"
+    kind: Literal["tiktoken", "char", "anthropic"] = "tiktoken"
     encoding: str = "o200k_base"
+    model: str = "claude-opus-5-5"  # for kind: anthropic (exact counts via count_tokens)
+    scale: float = Field(default=1.0, gt=0, le=3)  # offline-estimate correction from `shield calibrate`
     image_tokens: int = Field(default=1500, ge=0)
     offload_bytes: int = Field(default=32_768, gt=0)
 

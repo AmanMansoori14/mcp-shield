@@ -1,6 +1,7 @@
 """Drive Shield exactly like an MCP host would: launch ``shield run`` over stdio and make calls.
 
-    uv run python -m demo.drive examples/shield.yaml
+    uv run python -m demo.drive examples/shield.yaml                      # stdio
+    SHIELD_TOKEN=... uv run python -m demo.drive http://127.0.0.1:8765/mcp  # Streamable HTTP
 
 The example config connects a benign server (``notes``) and a deliberately malicious one
 (``evil``), so the run shows each protection in turn.
@@ -8,11 +9,16 @@ The example config connects a benign server (``notes``) and a deliberately malic
 
 from __future__ import annotations
 
+import os
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import anyio
+import httpx2
 from mcp import Client, StdioServerParameters, types
+from mcp.client.streamable_http import streamable_http_client
 
 
 async def approve_in_demo(context: Any, params: types.ElicitRequestParams) -> types.ElicitResult:
@@ -27,10 +33,27 @@ def show(label: str, result: types.CallToolResult) -> None:
     print(f"{label:<44} → {flag:<5} {text[:110]}{'…' if len(text) > 110 else ''}")
 
 
-async def main(config: str) -> None:
-    shield = StdioServerParameters(command="uv", args=["run", "shield", "run", "--config", config])
+def target(arg: str) -> tuple[Any, str]:
+    """A shield.yaml path → launch `shield run` over stdio; an http(s) URL → Streamable HTTP with SHIELD_TOKEN."""
+    if not arg.startswith(("http://", "https://")):
+        return StdioServerParameters(command="uv", args=["run", "shield", "run", "--config", arg]), "stdio"
+
+    @asynccontextmanager
+    async def http() -> AsyncIterator[Any]:
+        headers = {"Authorization": f"Bearer {os.environ['SHIELD_TOKEN']}"}
+        async with (
+            httpx2.AsyncClient(headers=headers, timeout=60) as session,
+            streamable_http_client(arg, http_client=session) as streams,
+        ):
+            yield streams
+
+    return http(), "HTTP"
+
+
+async def main(arg: str) -> None:
+    shield, transport = target(arg)
     async with Client(shield, elicitation_callback=approve_in_demo) as client:
-        print(f"connected over stdio · protocol {client.protocol_version}\n")
+        print(f"connected over {transport} · protocol {client.protocol_version}\n")
 
         tools = sorted(t.name for t in (await client.list_tools()).tools)
         print(f"tools/list → {len(tools)} visible: {', '.join(tools)}")

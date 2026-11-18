@@ -173,7 +173,7 @@ A full check of the code against the PRD. Fixed items carry their test.
 | 17 | A down upstream restarts with backoff, 3 tries | **Fixed.** A lost connection (failed call or failed periodic re-list) wakes the session; reconnects with doubling backoff; gives up after 3 failed attempts in a row; a reconnect re-screens tools (`test_crashed_upstream_reconnects`, `test_gives_up_after_max_restarts`) |
 | 20 | Every request audited (MP-C2) | **Fixed.** `initialize`, `notifications/initialized`, `server/discover`, `ping` and other messages are audited by a middleware (`test_every_protocol_message_is_audited`) |
 | – | One connection row per client (MP-C Connection) | **Fixed (bug found during #20).** SDK v2 creates a new session object per request, so wave 1 logged one connection per request. Legacy traffic is now keyed by the SDK's `Connection`; 2026-07-28 traffic is grouped by client info + token on every transport. `list_changed` is pushed through `Connection.outbound` (`test_one_connection_row_per_client`, `test_list_changed_is_pushed_to_legacy_clients`) |
-| 3 | Exact token counts via provider API; ±10% calibration | Open. Needs an API key; the ±10% success marker is not measured |
+| 3 | Exact token counts via provider API; ±10% calibration | **Built, measurement pending.** `tokenizer.kind: anthropic` (cached `count_tokens`, fallback with a circuit breaker), `tokenizer.scale` for the offline estimate, and `shield calibrate`. Tested against a fake `count_tokens`; the real ±10% check needs credentials (`ant auth login` or `ANTHROPIC_API_KEY`) and one `make calibrate` run |
 | 15 | `shield init` writes sample config (UJ-C1) | Open. Copy `examples/` instead |
 | 16 | `shield check-policy` dry-runs attack fixtures | Open. `shield check` validates files only |
 | 18 | Alert when the spool passes 100 MB | Open |
@@ -189,7 +189,7 @@ A full check of the code against the PRD. Fixed items carry their test.
 
 ### Wave 3 implementation notes (deviations from the PRD)
 
-- **README GIF:** the README uses static dashboard screenshots instead of an animated GIF. The real `make demo` output is quoted as text.
+- **README GIF** (gap #10) is now included: `docs/assets/demo.gif`, rendered by `scripts/make_demo_gif.py` from the captured output of a real demo run (`make gif`), with the raw text alongside. It is a replay of real output, not a screen recording.
 - **Dashboard tables in screenshots:** Streamlit draws tables on a canvas that the headless browser doesn't paint, so the screenshots show the chart pages and the request detail. Table pages are covered by `AppTest`.
 - **OpenTelemetry export** is left to the operator: Shield adds attributes to the SDK's spans but doesn't configure an exporter.
 - **HTTP auth** is a static bearer token (`SHIELD_TOKEN`), as planned for v1; OAuth is not implemented.
@@ -200,7 +200,7 @@ A full check of the code against the PRD. Fixed items carry their test.
 - **Rate limits** return an `is_error` tool result (verdict `block`) so the model can read "retry later" and back off, instead of a protocol-level `MCPError` as IP-A15 suggested.
 - **Hot reload** polls the file's mtime every second instead of adding `watchfiles`.
 - **TS-B4** ships the classifier hook only; no ONNX model is bundled, so it stays in `review`.
-- **TS-B8 Docker compose** is not included: Docker isn't available in the build environment to verify it. `make demo` covers the demo over real stdio.
+- **TS-B8 Docker compose** (gap #7) is now included: `Dockerfile` (non-root, CA certificates, locked deps, health check) and `docker-compose.yml` (shield over HTTP, dashboard, demo client; ports on 127.0.0.1). Docker isn't installed in the build environment, so every build step and service command was replayed by hand from a clean copy (locked sync, health check, `shield:8765` Host accepted and a foreign Host rejected, the full HTTP demo with approval, the dashboard on 0.0.0.0), and a CI job builds the image and runs the compose demo on the first push.
 - **Rug-pulls on 2026-07-28 upstreams** are caught by a periodic re-listing (`refresh_interval_s`, default 30 s) rather than a `subscriptions/listen` stream.
 - ~~**Redaction in the model path** covers tool results only.~~ Fixed after wave 3: `resources/read` and `prompts/get` replies are redacted too (gap #9).
 

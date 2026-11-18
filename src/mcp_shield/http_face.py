@@ -57,10 +57,12 @@ def build_http_app(
     host: str = "127.0.0.1",
     port: int = 8765,
     extra_origins: list[str] | None = None,
+    extra_hosts: list[str] | None = None,
 ) -> Any:
+    """``extra_hosts`` admits other ``Host`` headers, e.g. ``shield:8765`` inside a Docker network."""
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=[f"{host}:{port}", f"127.0.0.1:{port}", f"localhost:{port}"],
+        allowed_hosts=[f"{host}:{port}", f"127.0.0.1:{port}", f"localhost:{port}", *(extra_hosts or [])],
         allowed_origins=[
             f"http://{host}:{port}",
             f"http://127.0.0.1:{port}",
@@ -72,10 +74,17 @@ def build_http_app(
     return BearerAuth(app, token)
 
 
-async def serve_http(shield: Shield, *, token: str, host: str = "127.0.0.1", port: int = 8765) -> None:
+async def serve_http(
+    shield: Shield,
+    *,
+    token: str,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    extra_hosts: list[str] | None = None,
+) -> None:
     import uvicorn
 
-    app = build_http_app(shield, token=token, host=host, port=port)
+    app = build_http_app(shield, token=token, host=host, port=port, extra_hosts=extra_hosts)
     config = uvicorn.Config(app, host=host, port=port, log_level="warning", lifespan="on")
     async with shield.running():
         await uvicorn.Server(config).serve()
