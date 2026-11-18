@@ -1,0 +1,3 @@
+# Used only for the *estimated* cost column. Set this to your model's input-token price.
+currency: USD
+input_per_million: 3.00

@@ -1,0 +1,65 @@
+[project]
+name = "mcp-shield"
+version = "0.1.0"
+description = "Security and observability gateway for MCP servers: policy, injection scanning, approvals, and a per-request audit with token usage."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "jsonschema>=4.26.0",
+    "mcp>=2,<3",
+    "pydantic>=2.7",
+    "pyyaml>=6",
+    "tiktoken>=0.8",
+    "typer>=0.12",
+]
+
+[project.scripts]
+shield = "mcp_shield.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.13.9,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "anyio>=4.16.0",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.5",
+    "types-jsonschema>=4.26.0.20261006",
+    "types-pyyaml>=6.0.12.20261113",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = ["docs"]  # PRD build tooling, not package code
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "ASYNC"]
+ignore = ["RUF001", "RUF002", "RUF003", "E501"]  # line length is the formatter's job
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["mcp_shield"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["tiktoken", "tiktoken.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["mcp_shield"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

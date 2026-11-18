@@ -1,0 +1,16 @@
+# Upstream MCP servers. The id becomes the tool prefix: notes__echo, notes__read_note, ...
+servers:
+  - id: notes
+    transport: stdio
+    command: ["uv", "run", "python", "-m", "demo.benign_server"]
+    timeout_s: 30
+
+  # More examples (uncomment to use):
+  # - id: fs
+  #   transport: stdio
+  #   command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "./sandbox"]
+  #
+  # - id: github
+  #   transport: http
+  #   url: https://example.internal/mcp
+  #   headers: { Authorization: "Bearer ${GITHUB_MCP_TOKEN}" }   # the upstream's own token (MP-C8)

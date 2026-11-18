@@ -1,0 +1,18 @@
+# Security policy. Validated in wave 1; enforced from wave 2 (TS-B1 onwards).
+version: 1
+defaults: { action: allow, scan_results: warn, fail_open: false }
+context_budget: { per_call_tokens: 4000, on_exceed: warn }
+approval: { token_ttl_s: 300, approve_destructive: true }
+pinning: { on_change: require_approval }
+
+rules:
+  - id: deny-write-outside-sandbox
+    match: { server: fs, tool: write_file }
+    when: { arg: path, not_glob: "./sandbox/**" }
+    action: deny
+  - id: approve-destructive
+    match: { tool: ["delete_*", "*_merge", "drop_*"] }
+    action: require_approval
+  - id: rate-limit-github
+    match: { server: github }
+    rate_limit: { calls: 30, per_s: 60 }
