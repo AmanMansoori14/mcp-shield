@@ -194,6 +194,25 @@ class AuditStore:
             ),
         )
 
+    def upsert_pin(
+        self,
+        server_id: str,
+        tool: str,
+        def_hash: str,
+        status: str,
+        *,
+        first_seen_at: str | None = None,
+        last_changed_at: str | None = None,
+    ) -> None:
+        with self._tx() as db:
+            db.execute(
+                """INSERT INTO tool_pins (server_id, tool, def_hash, first_seen_at, last_changed_at, status)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(server_id, tool) DO UPDATE SET def_hash=excluded.def_hash, status=excluded.status,
+                    last_changed_at=COALESCE(excluded.last_changed_at, tool_pins.last_changed_at)""",
+                (server_id, tool, def_hash, first_seen_at or now_iso(), last_changed_at, status),
+            )
+
     def delete_older_than(self, cutoff_iso: str) -> int:
         """Retention: drop requests (and, by cascade, their tokens and findings) created before ``cutoff_iso``."""
         with self._tx() as db:

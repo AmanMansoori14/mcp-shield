@@ -103,6 +103,16 @@ def stats(
                             FROM requests r JOIN token_usage t ON t.request_id=r.id
                             WHERE r.method='tools/call' GROUP BY r.tool ORDER BY resp DESC LIMIT 5"""):
         typer.echo(f"    {r['tool']:<32} {r['calls']:>5} calls  {r['resp']:>8,} tok  {r['ms']:>7.1f} ms avg")
+    events = store.query("""SELECT f.rule_id, f.severity, COUNT(*) n, MAX(r.created_at) last
+                            FROM findings f JOIN requests r ON r.id=f.request_id
+                            WHERE f.severity IN ('medium','high','critical')
+                            GROUP BY f.rule_id ORDER BY n DESC LIMIT 8""")
+    if events:
+        typer.secho("\n  Security events", bold=True)
+        for e in events:
+            colour = "red" if e["severity"] in ("high", "critical") else "yellow"
+            typer.secho(f"    {e['severity']:<9}", fg=colour, nl=False)
+            typer.echo(f" {e['rule_id']:<36} {e['n']:>4}×   last {e['last'][11:19]}")
     typer.secho(f"\n  Last {last} requests", bold=True)
     for r in store.query(
         """SELECT r.created_at, r.method, COALESCE(r.tool,'') tool, r.verdict,
@@ -112,7 +122,7 @@ def stats(
     ):
         colour = {"allow": "green", "warn": "yellow"}.get(r["verdict"], "red")
         typer.echo(f"    {r['created_at'][11:23]}  {r['method']:<16} {r['tool']:<28} ", nl=False)
-        typer.secho(f"{r['verdict']:<8}", fg=colour, nl=False)
+        typer.secho(f"{r['verdict']:<16}", fg=colour, nl=False)
         typer.echo(f" {r['tok']:>7,} tok {r['ms']:>8.1f} ms")
 
 

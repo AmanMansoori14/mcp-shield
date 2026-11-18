@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Protocol
 
 from mcp import types
+from pydantic import BaseModel
 
 from mcp_shield import __version__
 from mcp_shield.audit.logger import AuditLogger
@@ -51,6 +52,8 @@ class PostStage(Protocol):
 
 STOPPING = {"block", "denied", "expired", "approval_pending", "error"}
 
+Approve = Callable[[RequestContext], Awaitable[types.InputRequiredResult | None]]
+
 
 class Pipeline:
     def __init__(
@@ -58,12 +61,13 @@ class Pipeline:
         meter: Meter,
         audit: AuditLogger,
         *,
-        policy_hash: str | None,
+        policy_hash: str | Callable[[], str | None] | None,
         store_payloads: bool = False,
         max_payload_bytes: int = 65_536,
         pre_stages: Sequence[PreStage] = (),
         post_stages: Sequence[PostStage] = (),
         fail_open: bool = False,
+        redact: Callable[[Any], Any] | None = None,
     ):
         self.meter = meter
         self.audit = audit
@@ -73,6 +77,7 @@ class Pipeline:
         self.pre_stages = list(pre_stages)
         self.post_stages = list(post_stages)
         self.fail_open = fail_open
+        self.redact = redact
 
     # -- tools/call ----------------------------------------------------------
 
@@ -80,18 +85,37 @@ class Pipeline:
         self,
         ctx: RequestContext,
         forward: Callable[[], Awaitable[types.CallToolResult]],
-    ) -> types.CallToolResult:
+        approve: Approve | None = None,
+    ) -> types.CallToolResult | types.InputRequiredResult:
         usage = TokenUsage(tokenizer=self.meter.tokenizer.name)
-        result: types.CallToolResult | None = None
+        result: types.CallToolResult | types.InputRequiredResult | None = None
         try:
             with ctx.stage("meter.request"):
-                req_tokens = await self.meter.request_tokens((ctx.params or {}).get("arguments"))
+                # Leg 2 of an approval repeats leg 1's arguments: count them once per logical call.
+                req_tokens = (
+                    0
+                    if ctx.leg == 2
+                    else await self.meter.request_tokens((ctx.params or {}).get("arguments"))
+                )
 
             for stage in self.pre_stages:
                 with ctx.stage(stage.name):
                     await stage(ctx)
                 if ctx.verdict in STOPPING:
                     break
+
+            if ctx.verdict not in STOPPING and ctx.needs_approval:
+                if approve is None:
+                    ctx.escalate(
+                        "denied", f"approval required ({ctx.approval_reason}) but approvals are unavailable"
+                    )
+                else:
+                    with ctx.stage("approval"):
+                        pending = await approve(ctx)
+                    if pending is not None:
+                        result = pending
+                        usage = self.meter.usage(request=req_tokens)
+                        return pending
 
             if ctx.verdict in STOPPING:
                 result = self.denial(ctx)
@@ -105,6 +129,7 @@ class Pipeline:
                 if ctx.verdict in STOPPING:
                     result = self.denial(ctx)
 
+            assert isinstance(result, types.CallToolResult)
             with ctx.stage("meter.response"):
                 resp_tokens = 0
                 if ctx.verdict not in STOPPING:
@@ -195,11 +220,12 @@ class Pipeline:
                 error_message=ctx.reason if ctx.verdict in STOPPING else None,
                 latency_ms=ctx.elapsed_ms,
                 upstream_ms=ctx.upstream_ms,
+                approval_ms=ctx.approval_ms,
                 stage_ms=dict(ctx.stage_ms),
                 params_redacted=params_s,
                 result_redacted=result_s,
                 payload_truncated=p_trunc or r_trunc,
-                policy_hash=self.policy_hash,
+                policy_hash=self.policy_hash() if callable(self.policy_hash) else self.policy_hash,
                 shield_version=__version__,
                 tokens=TokenRecord(
                     request_tokens=usage.request_tokens,
@@ -217,10 +243,12 @@ class Pipeline:
             log.exception("failed to build audit record for %s", ctx.request_id)
 
     def _payload(self, value: Any) -> tuple[str | None, bool]:
-        # Payloads are only stored once the redactor exists (TS-B5) - raw secrets never go to disk (MP-C3).
-        if not self.store_payloads or value is None:
+        # Payloads are stored only through the redactor - raw secrets never go to disk (MP-C3).
+        if not self.store_payloads or self.redact is None or value is None:
             return None, False
-        text = canonical_json(value)
+        if isinstance(value, BaseModel):
+            value = value.model_dump(mode="json", by_alias=True, exclude_none=True)
+        text = canonical_json(self.redact(value))
         if len(text.encode()) <= self.max_payload_bytes:
             return text, False
         return text.encode()[: self.max_payload_bytes].decode(errors="ignore"), True

@@ -29,7 +29,17 @@ class RequestContext:
     findings: list[Finding] = field(default_factory=list)
     stage_ms: dict[str, float] = field(default_factory=dict)
     upstream_ms: float | None = None
+    approval_ms: float | None = None
+    upstream_tool: str | None = None
+    input_schema: dict[str, Any] | None = None
+    destructive_hint: bool | None = None
+    needs_approval: bool = False
+    approval_reason: str | None = None
     t0: float = field(default_factory=time.perf_counter)
+
+    def require_approval(self, reason: str) -> None:
+        if not self.needs_approval:
+            self.needs_approval, self.approval_reason = True, reason
 
     @contextmanager
     def stage(self, name: str) -> Iterator[None]:

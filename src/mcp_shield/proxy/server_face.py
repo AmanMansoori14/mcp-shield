@@ -18,9 +18,10 @@ import logging
 import weakref
 from typing import Any
 
-import jsonschema
 from mcp import MCPError, types
 from mcp.server import Server, ServerRequestContext
+from mcp.server.context import CallNext, HandlerResult
+from mcp.server.request_state import RequestStateBoundary, RequestStateSecurity
 from mcp.types import CLIENT_INFO_META_KEY, INVALID_PARAMS
 
 from mcp_shield import __version__
@@ -30,6 +31,8 @@ from mcp_shield.pipeline.context import RequestContext
 from mcp_shield.pipeline.pipeline import Pipeline
 from mcp_shield.proxy import router
 from mcp_shield.proxy.upstream_pool import UpstreamPool
+from mcp_shield.security.approval import Approver
+from mcp_shield.security.pins import ToolGuard
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +83,14 @@ class ConnectionTracker:
         return list(self._by_session.keys())
 
 
-def build_server(pool: UpstreamPool, pipeline: Pipeline, tracker: ConnectionTracker) -> Server[Any]:
+def build_server(
+    pool: UpstreamPool,
+    pipeline: Pipeline,
+    tracker: ConnectionTracker,
+    *,
+    guard: ToolGuard | None = None,
+    approver: Approver | None = None,
+) -> Server[Any]:
     meter = pipeline.meter
 
     def new_ctx(ctx: ServerRequestContext[Any], method: str, params: Any = None) -> RequestContext:
@@ -103,9 +113,17 @@ def build_server(pool: UpstreamPool, pipeline: Pipeline, tracker: ConnectionTrac
         rctx = new_ctx(ctx, "tools/list", params)
 
         async def run() -> types.ListToolsResult:
-            return types.ListToolsResult(
-                tools=[router.namespaced_tool(sid, t) for sid, t in pool.all_tools()]
-            )
+            tools = [
+                router.namespaced_tool(sid, t)
+                for sid, t in pool.all_tools()
+                if guard is None or not guard.is_hidden(sid, t.name)  # poisoned tools are hidden (MP-B3)
+            ]
+            if guard is not None:
+                for f in guard.listing_findings():
+                    rctx.add_finding(f)
+                if rctx.findings:
+                    rctx.escalate("warn")
+            return types.ListToolsResult(tools=tools)
 
         async def measure(result: types.ListToolsResult) -> TokenUsage:
             return meter.usage(schema=await meter.definitions_tokens(result.tools))
@@ -115,7 +133,7 @@ def build_server(pool: UpstreamPool, pipeline: Pipeline, tracker: ConnectionTrac
 
     async def on_call_tool(
         ctx: ServerRequestContext[Any], params: types.CallToolRequestParams
-    ) -> types.CallToolResult:
+    ) -> types.CallToolResult | types.InputRequiredResult:
         parts = router.split(params.name)
         up = pool.get(parts[0]) if parts else None
         if parts is None or up is None or (up.client is not None and parts[1] not in up.tools):
@@ -129,27 +147,19 @@ def build_server(pool: UpstreamPool, pipeline: Pipeline, tracker: ConnectionTrac
 
         server_id, tool_name = parts
         rctx = new_ctx(ctx, "tools/call", params)
-        rctx.server_id, rctx.tool = server_id, params.name
+        rctx.server_id, rctx.tool, rctx.upstream_tool = server_id, params.name, tool_name
         arguments = params.arguments or {}
+        tool_def = up.tools.get(tool_name)
+        if tool_def is not None:
+            rctx.input_schema = tool_def.input_schema
+            rctx.destructive_hint = tool_def.annotations.destructive_hint if tool_def.annotations else None
+        if approver is not None:
+            approver.prepare_retry(rctx, params)
 
         async def forward() -> types.CallToolResult:
             if up.client is None:
                 rctx.escalate("error", f"upstream {server_id!r} is unavailable ({up.last_error or 'down'})")
                 rctx.add_finding(Finding(stage="upstream", rule_id="upstream.unavailable", severity="medium"))
-                return pipeline.denial(rctx)
-            tool = up.tools[tool_name]
-            problem = _schema_problem(tool.input_schema, arguments)
-            if problem:
-                # SDK v2's low-level Server doesn't validate arguments; Shield does (IP-A13).
-                rctx.escalate("block", f"arguments don't match {params.name}'s input schema: {problem}")
-                rctx.add_finding(
-                    Finding(
-                        stage="args",
-                        rule_id="args.schema_invalid",
-                        severity="low",
-                        excerpt_redacted=problem[:200],
-                    )
-                )
                 return pipeline.denial(rctx)
 
             async def relay_progress(progress: float, total: float | None, message: str | None) -> None:
@@ -177,7 +187,19 @@ def build_server(pool: UpstreamPool, pipeline: Pipeline, tracker: ConnectionTrac
                 )
             return result
 
-        return await pipeline.call_tool(rctx, forward)
+        async def approve(c: RequestContext) -> types.InputRequiredResult | None:
+            assert approver is not None
+            return await approver.check(c, ctx, params, c.approval_reason or "approval required")
+
+        result = await pipeline.call_tool(rctx, forward, approve if approver is not None else None)
+        if (
+            guard is not None
+            and tool_def is not None
+            and rctx.verdict == "approved"
+            and guard.get(server_id, tool_name).status == "changed"
+        ):
+            guard.accept_change(server_id, tool_name, tool_def)  # the human accepted the new definition
+        return result
 
     # -- resources ------------------------------------------------------------------
 
@@ -270,7 +292,7 @@ def build_server(pool: UpstreamPool, pipeline: Pipeline, tracker: ConnectionTrac
         result: types.GetPromptResult = await pipeline.observe(rctx, run, measure)
         return result
 
-    return Server(
+    server: Server[Any] = Server(
         "mcp-shield",
         version=__version__,
         title="MCP Shield",
@@ -283,6 +305,39 @@ def build_server(pool: UpstreamPool, pipeline: Pipeline, tracker: ConnectionTrac
         on_list_prompts=on_list_prompts,
         on_get_prompt=on_get_prompt,
     )
+
+    async def audit_rejected_state(ctx: ServerRequestContext[Any], call_next: CallNext) -> HandlerResult:
+        """The SDK rejects forged/expired requestState before any handler runs; audit it anyway (MP-C2)."""
+        try:
+            return await call_next(ctx)
+        except MCPError as e:
+            if ctx.method == "tools/call" and "requestState" in e.error.message:
+                raw = dict(ctx.params or {})
+                rctx = RequestContext(
+                    connection=tracker.for_request(ctx),
+                    method="tools/call",
+                    protocol_version=ctx.protocol_version,
+                    jsonrpc_id=str(ctx.request_id) if ctx.request_id is not None else None,
+                    params={"name": raw.get("name"), "arguments": raw.get("arguments")},
+                    tool=str(raw.get("name")),
+                    leg=2,
+                )
+                parts = router.split(str(raw.get("name") or ""))
+                rctx.server_id = parts[0] if parts else None
+                rctx.error_code = e.error.code
+                rctx.add_finding(Finding(stage="approval", rule_id="approval.state_invalid", severity="high"))
+                rctx.escalate("denied", "invalid or expired approval state")
+                await _audit_miss(pipeline, rctx)
+            raise
+
+    if approver is not None:
+        # Outer: audit what the boundary rejects. Inner: seal/verify approval state (2026-07-28).
+        server.middleware.append(audit_rejected_state)
+        ttl = max(600.0, approver.ttl_s * 2)  # Shield enforces its own (audited) expiry first
+        server.middleware.append(
+            RequestStateBoundary(RequestStateSecurity.ephemeral(ttl=ttl), default_audience=server.name)
+        )
+    return server
 
 
 async def notify_list_changed(tracker: ConnectionTracker, kind: str) -> None:
@@ -309,18 +364,6 @@ async def _audit_miss(pipeline: Pipeline, rctx: RequestContext) -> None:
         )
 
     await pipeline.observe(rctx, run, measure)
-
-
-def _schema_problem(schema: dict[str, Any], arguments: dict[str, Any]) -> str | None:
-    try:
-        validator_cls = jsonschema.validators.validator_for(schema, default=jsonschema.Draft202012Validator)
-        error = jsonschema.exceptions.best_match(validator_cls(schema).iter_errors(arguments))
-    except jsonschema.exceptions.SchemaError as e:
-        return f"upstream schema is invalid ({e.message})"
-    if error is None:
-        return None
-    path = ".".join(str(p) for p in error.absolute_path)
-    return f"{path + ': ' if path else ''}{error.message}"
 
 
 def _client_info(ctx: ServerRequestContext[Any]) -> tuple[str | None, str | None]:

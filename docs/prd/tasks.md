@@ -25,13 +25,14 @@ This is the execution handoff. Each row is one behavior, small enough to impleme
 ```mermaid
 kanban
   todo[Todo]
-    TS-B1
-    TS-B3
-    TS-B5
-    TS-B6
+    TS-C1
+    TS-C2
+    TS-C6
+    TS-C8
   in_progress[In Progress]
   review[Review]
     TS-A1
+    TS-B4
   blocked[Blocked]
   done[Done]
     TS-A2
@@ -40,6 +41,14 @@ kanban
     TS-A5
     TS-A6
     TS-A7
+    TS-B1
+    TS-B2
+    TS-B3
+    TS-B5
+    TS-B6
+    TS-B7
+    TS-B8
+    TS-B9
 ```
 
 ## 4. Canonical Task Table
@@ -53,15 +62,15 @@ kanban
 | `TS-A5` | W1 | done | A2 | MP-B6, MP-C2, IP-A5, IP-A10 | **problem:** no audit<br>**goal:** SQLite schema (connections, requests with `logical_call_id` + `protocol_version`, token_usage, findings, policy_versions, upstreams, tool_pins) + migrations, async queue logger, JSONL spool + back-fill | SQLModel, SQLite | S: record builder<br>I: 1,000 mixed requests → 1,000 rows; DB locked → spool → back-fill<br>E: – | Given DB is read-only, when 10 requests, then 10 spool lines and 10 rows after restart | Zero dropped records; WAL mode | Count assertion |
 | `TS-A6` | W1 | done | A5 | MP-C1, IP-B1 | **problem:** token cost unknown<br>**goal:** `Tokenizer` protocol (tiktoken, provider, char/4) + meter for request (once per logical call), response (content only) and schema (per-turn snapshot) tokens + pricing | tiktoken | S: counts for text/image/structured<br>I: calibration vs provider (skip without key)<br>E: – | Given a 1,000-word result, when metered, then `response_tokens` ≈ 1,300 ± 10% | Every row has `tokenizer` + `estimated=true`; >32 KB counted off-loop | Calibration report |
 | `TS-A7` | W1 | done | A3, A5, A6 | MP-B6 | **problem:** pipeline stages not wired<br>**goal:** `RequestContext` + ordered pipeline (IP steps 1–13) with latency per stage | – | S: stage order unit<br>I: every request audited incl. errors<br>E: – | Given an upstream timeout, then the audit row has verdict `error` + latency | p95 overhead ≤ 25 ms on echo bench | Bench output |
-| `TS-B1` | W2 | todo | A7 | MP-B2 | **problem:** no access control<br>**goal:** policy engine: match server/tool globs, arg rules, rate limits, `require_approval`, worst-of verdict | – | S: rule matching table tests; clock-injected rate limit<br>I: deny over protocol<br>E: – | Given `deny-write-outside-sandbox`, when writing `/etc/passwd`, then block with rule ID | Policy hash stored per row | pytest report |
-| `TS-B2` | W2 | todo | B1 | MP-B2, J5 | **problem:** restart to change policy<br>**goal:** file watcher hot reload, atomic swap, invalid = keep old; `shield check-policy` | watchfiles, Typer | S: –<br>I: invalid YAML keeps old hash<br>E: – | Given a policy edit, when saved, then the next request carries the new hash | `policy_versions` appended | Test output |
-| `TS-B3` | W2 | todo | A7 | MP-B3 | **problem:** poisoned descriptions reach the model<br>**goal:** heuristic rule pack for descriptions + results (ignore-previous, exfil instructions, hidden unicode/zero-width, markdown image exfil, tool shadowing) | – | S: positive + negative per rule<br>I: 12 attack fixtures + 50 benign<br>E: – | Given an `evil` description, when `tools/list`, then the tool is hidden and a finding recorded | ≥ 12/12 attacks caught; ≤ 2/50 benign flagged | Precision/recall table |
-| `TS-B4` | W2 | todo | B3 | MP-B3 | **problem:** heuristics miss paraphrases<br>**goal:** optional ONNX classifier stage behind config flag | onnxruntime | S: threshold logic<br>I: fixtures with classifier on<br>E: – | Given classifier enabled, when paraphrased injection, then warn | Off by default; adds ≤ 15 ms p95 | Bench + test |
-| `TS-B5` | W2 | todo | A7 | MP-B4, MP-C3 | **problem:** secrets leak into context/logs<br>**goal:** redactor for API keys, JWT, private keys, AWS, email, phone; runs before response + audit | detect-secrets patterns | S: rule tests<br>I: grep audit DB for raw fixtures = 0 hits<br>E: – | Given a result with `AKIA…`, then client + DB see `[REDACTED:aws_key]` | No raw secret in DB | Test output |
-| `TS-B6` | W2 | todo | B1, A5 | MP-B5, IP pipeline step 5 | **problem:** destructive calls run unattended<br>**goal:** approval via `Resolve` + `Elicit` (multi-round-trip on 2026-07-28, live elicitation on legacy); sealed `request_state` with args hash and 5 min expiry; both legs linked by `logical_call_id` | mcp SDK v2 | S: seal/verify, expiry, args mismatch<br>I: modern + legacy client accept/decline/no-capability; tampered state rejected<br>E: Claude Desktop dialog | Given `merge_pull_request`, when the user declines, then leg 2 has verdict `denied` and nothing reaches upstream | 2 rows, 1 `logical_call_id`; args counted once; `approval_ms` recorded | Screen recording |
-| `TS-B7` | W2 | todo | A6, B1 | MP-C1, IP-B1 | **problem:** oversized outputs bloat context<br>**goal:** per-call budget warn/truncate with audit pointer | – | S: truncate boundary<br>I: 20k-token result truncated<br>E: – | Given budget 4,000, when a 12k result arrives, then truncated + finding | Truncation message per DG-C1 | Test output |
-| `TS-B8` | W2 | todo | B3, B5, B6 | MP-B8 | **problem:** nothing to demo<br>**goal:** benign + poisoned demo servers, attack fixtures, `make demo`, Claude Desktop config | Docker compose | S: –<br>I: demo script asserts expected verdicts<br>E: full demo walkthrough | Given `make demo`, when the script runs, then 1 block, 1 warn+redact, 1 approval | Boots in < 60 s; image includes CA certificates (`httpx2` uses the OS certificate store) | GIF |
-| `TS-B9` | W2 | todo | A3, A5 | MP-B3, MP-C7, MP-C9, IP-A16, IP-A17 | **problem:** upstreams can impersonate, mislabel, or silently change tools<br>**goal:** prefix from config id only; tool pinning + rug-pull detection with `on_change` policy; annotations can only tighten | – | S: hashing, prefixing, annotation rules<br>I: `rugpull_server` mutates a description → `tool_changed`; upstream claiming `serverInfo.name="fs"` keeps its own prefix; `readOnlyHint` doesn't skip approval<br>E: rug-pull demo | Given a pinned tool, when its description changes, then the next call needs approval | P6 shows the diff | Test output + GIF |
+| `TS-B1` | W2 | done | A7 | MP-B2 | **problem:** no access control<br>**goal:** policy engine: match server/tool globs, arg rules, rate limits, `require_approval`, worst-of verdict | – | S: rule matching table tests; clock-injected rate limit<br>I: deny over protocol<br>E: – | Given `deny-write-outside-sandbox`, when writing `/etc/passwd`, then block with rule ID | Policy hash stored per row | pytest report |
+| `TS-B2` | W2 | done | B1 | MP-B2, J5 | **problem:** restart to change policy<br>**goal:** file watcher hot reload, atomic swap, invalid = keep old; `shield check-policy` | watchfiles, Typer | S: –<br>I: invalid YAML keeps old hash<br>E: – | Given a policy edit, when saved, then the next request carries the new hash | `policy_versions` appended | Test output |
+| `TS-B3` | W2 | done | A7 | MP-B3 | **problem:** poisoned descriptions reach the model<br>**goal:** heuristic rule pack for descriptions + results (ignore-previous, exfil instructions, hidden unicode/zero-width, markdown image exfil, tool shadowing) | – | S: positive + negative per rule<br>I: 12 attack fixtures + 50 benign<br>E: – | Given an `evil` description, when `tools/list`, then the tool is hidden and a finding recorded | ≥ 12/12 attacks caught; ≤ 2/50 benign flagged | Precision/recall table |
+| `TS-B4` | W2 | review | B3 | MP-B3 | **problem:** heuristics miss paraphrases<br>**goal:** optional ONNX classifier stage behind config flag | onnxruntime | S: threshold logic<br>I: fixtures with classifier on<br>E: – | Given classifier enabled, when paraphrased injection, then warn | Off by default; adds ≤ 15 ms p95 | Bench + test |
+| `TS-B5` | W2 | done | A7 | MP-B4, MP-C3 | **problem:** secrets leak into context/logs<br>**goal:** redactor for API keys, JWT, private keys, AWS, email, phone; runs before response + audit | detect-secrets patterns | S: rule tests<br>I: grep audit DB for raw fixtures = 0 hits<br>E: – | Given a result with `AKIA…`, then client + DB see `[REDACTED:aws_key]` | No raw secret in DB | Test output |
+| `TS-B6` | W2 | done | B1, A5 | MP-B5, IP pipeline step 5 | **problem:** destructive calls run unattended<br>**goal:** approval via `Resolve` + `Elicit` (multi-round-trip on 2026-07-28, live elicitation on legacy); sealed `request_state` with args hash and 5 min expiry; both legs linked by `logical_call_id` | mcp SDK v2 | S: seal/verify, expiry, args mismatch<br>I: modern + legacy client accept/decline/no-capability; tampered state rejected<br>E: Claude Desktop dialog | Given `merge_pull_request`, when the user declines, then leg 2 has verdict `denied` and nothing reaches upstream | 2 rows, 1 `logical_call_id`; args counted once; `approval_ms` recorded | Screen recording |
+| `TS-B7` | W2 | done | A6, B1 | MP-C1, IP-B1 | **problem:** oversized outputs bloat context<br>**goal:** per-call budget warn/truncate with audit pointer | – | S: truncate boundary<br>I: 20k-token result truncated<br>E: – | Given budget 4,000, when a 12k result arrives, then truncated + finding | Truncation message per DG-C1 | Test output |
+| `TS-B8` | W2 | done | B3, B5, B6 | MP-B8 | **problem:** nothing to demo<br>**goal:** benign + poisoned demo servers, attack fixtures, `make demo`, Claude Desktop config | Docker compose | S: –<br>I: demo script asserts expected verdicts<br>E: full demo walkthrough | Given `make demo`, when the script runs, then 1 block, 1 warn+redact, 1 approval | Boots in < 60 s; image includes CA certificates (`httpx2` uses the OS certificate store) | GIF |
+| `TS-B9` | W2 | done | A3, A5 | MP-B3, MP-C7, MP-C9, IP-A16, IP-A17 | **problem:** upstreams can impersonate, mislabel, or silently change tools<br>**goal:** prefix from config id only; tool pinning + rug-pull detection with `on_change` policy; annotations can only tighten | – | S: hashing, prefixing, annotation rules<br>I: `rugpull_server` mutates a description → `tool_changed`; upstream claiming `serverInfo.name="fs"` keeps its own prefix; `readOnlyHint` doesn't skip approval<br>E: rug-pull demo | Given a pinned tool, when its description changes, then the next call needs approval | P6 shows the diff | Test output + GIF |
 | `TS-C1` | W3 | todo | A5, A6 | MP-B7, DG P1 | **problem:** audit not visible<br>**goal:** Streamlit shell + P1 Overview KPIs, time range, health strip | Streamlit, Plotly | S: query layer<br>I: `AppTest` on seeded DB<br>E: manual | Given 5k seeded rows, when opening P1, then it renders in < 2 s | Empty state with commands | Screenshot |
 | `TS-C2` | W3 | todo | C1 | DG P2, P3 | **problem:** can't find/explain a request<br>**goal:** P2 explorer (URL filters, sort by tokens) + P3 detail tabs | Streamlit | S: filter builder<br>I: `AppTest` filter → rows<br>E: manual | Given `verdict=block`, then only blocked rows are listed; click → P3 shows reason | Redacted payload toggle | Screenshot |
 | `TS-C3` | W3 | todo | C1 | DG P4, IP-B1 | **problem:** token spend opaque<br>**goal:** P4 token analytics (by server over time, top tools, schema cost, budget breaches) | Plotly | S: aggregation SQL<br>I: totals equal SQL sum<br>E: manual | Given seeded data, then the top tool equals the SQL max of avg response tokens | "Estimated" caption visible | Screenshot |
@@ -129,12 +138,31 @@ notes: The default seal key is per process, which is fine for v1 (one process). 
 | `TS-A6` | `Tokenizer` protocol (tiktoken `o200k_base`, char/4 fallback); request (args), response (content only, no structured double count), schema (definitions) tokens; payloads ≥ 32 KB counted off the event loop; estimated cost from `pricing.yaml` | `src/mcp_shield/metering/`, `tests/unit/test_meter.py` |
 | `TS-A7` | Ordered pipeline with pre/post stage hooks; per-stage timings; worst-of verdicts; fail-closed on internal errors; 1,000 mixed requests → 1,000 audit rows; p95 overhead < 25 ms asserted | `src/mcp_shield/pipeline/`, `tests/integration/test_audit_pipeline.py` |
 
+| `TS-B1` | Rule engine: server/tool globs (plain or prefixed names), argument glob/not-glob/regex on normalised paths, strictest action wins, default deny, sliding-window rate limits, `destructiveHint` only tightens | `src/mcp_shield/security/policy.py`, `tests/unit/test_policy.py` |
+| `TS-B2` | Validate-then-swap reload on mtime change; invalid file keeps the old policy and its hash; each version registered in `policy_versions`; requests record the live hash | `tests/integration/test_security.py::test_hot_reload_applies_without_restart` |
+| `TS-B3` | 11 deterministic rules + hidden-Unicode detection over descriptions, parameter descriptions, results and arguments. **12/12 attack fixtures caught, 0/50 benign flagged** | `src/mcp_shield/security/scanner.py`, `tests/unit/test_scanner.py`, `tests/fixtures/` |
+| `TS-B4` | Classifier protocol and scanner hook (adds a finding only when rules miss). No ONNX model shipped; stays in `review` | `Scanner(classifier=...)`, `test_optional_classifier_adds_finding_when_rules_miss` |
+| `TS-B5` | 13 secret/PII patterns; applied to model-visible results (text, embedded resources, structured content) and to every stored payload. Payload storage now on by default | `src/mcp_shield/security/redactor.py`, `test_payloads_are_stored_only_after_redaction` |
+| `TS-B6` | 2026-07-28: `InputRequiredResult` + `request_state` sealed by the SDK `RequestStateBoundary`, args-hash binding, Shield-enforced expiry, two audit rows per logical call with args counted once. Legacy: live `elicitation/create`. Forged state rejected *and* audited. Approve / deny / decline / no-capability / expired all tested on both revisions | `src/mcp_shield/security/approval.py`, `test_destructive_tool_needs_approval`, `test_forged_request_state_is_rejected_and_audited` |
+| `TS-B7` | Budget stage: `warn` finding, or `truncate` text to fit with a notice naming the request ID | `test_context_budget_warns`, `test_context_budget_truncates` |
+| `TS-B8` | `demo/poisoned_server.py` (poisoned description, hidden Unicode, result injection + AWS key, destructive tool, oversized output), `demo/rugpull_server.py`, attack fixtures, `make demo` run over real stdio with security events in `shield stats` | `README.md` (real output) |
+| `TS-B9` | SHA-256 definition pins persisted in `tool_pins`; changed tools flagged, re-scanned and gated by `pinning.on_change`; one approval accepts the new definition; poisoned descriptions hidden; prefixes from config ids only | `src/mcp_shield/security/pins.py`, `test_benign_definition_change_requires_one_approval`, `test_rug_pull_needs_approval_then_is_accepted` |
+
+### Wave 2 implementation notes (deviations from the PRD)
+
+- **Rate limits** return an `is_error` tool result (verdict `block`) so the model can read "retry later" and back off, instead of a protocol-level `MCPError` as IP-A15 suggested.
+- **Hot reload** polls the file's mtime every second instead of adding `watchfiles`.
+- **TS-B4** ships the classifier hook only; no ONNX model is bundled, so it stays in `review`.
+- **TS-B8 Docker compose** is not included: Docker isn't available in the build environment to verify it. `make demo` covers the demo over real stdio.
+- **Rug-pulls on 2026-07-28 upstreams** are caught by a periodic re-listing (`refresh_interval_s`, default 30 s) rather than a `subscriptions/listen` stream.
+- **Redaction in the model path** covers tool results. `resources/read` and `prompts/get` content is redacted in the audit store but not yet in the response.
+
 ### Wave 1 implementation notes (deviations from the PRD)
 
 - **Audit store uses stdlib `sqlite3`** with plain-SQL migrations instead of SQLModel. Fewer moving parts; the schema matches IP Section 4.
 - **IP-A13, schema-invalid tools:** SDK v2 refuses to send *and* to receive a listing that contains an invalid tool schema, so such an upstream is marked `degraded` as a whole (others are unaffected). Per-tool dropping applies to names Shield can't re-expose (too long once prefixed, or invalid characters).
 - **Provider `count_tokens` adapter** is deferred to the calibration work (TS-C7). tiktoken and the char fallback are implemented; every row records its tokenizer.
-- **Payload storage is off** (`params_redacted`/`result_redacted` stay `NULL`) until the redactor lands in TS-B5, so raw secrets can't reach disk (MP-C3).
+- **Payload storage was off** in wave 1, until the redactor landed in TS-B5 (now on, always redacted first).
 - **List-changed from 2026-07-28 upstreams** needs a `subscriptions/listen` stream; wave 1 handles legacy notifications. Modern change detection comes with tool pinning (TS-B9).
 - **HTTP upstreams** are supported in config and the pool (own credentials only, MP-C8) but have no integration test yet; the HTTP face (TS-C6) will add one.
 

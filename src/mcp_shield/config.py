@@ -101,8 +101,21 @@ class ServersFile(_Strict):
 
 class PolicyDefaults(_Strict):
     action: Literal["allow", "deny"] = "allow"
-    scan_results: Literal["off", "warn", "block"] = "warn"
     fail_open: bool = False
+
+
+class ClassifierSettings(_Strict):
+    enabled: bool = False
+    threshold: float = Field(default=0.85, gt=0, le=1)
+
+
+class ScannerSettings(_Strict):
+    """What to do when the injection scanner fires (MP-B3)."""
+
+    description_action: Literal["warn", "block"] = "block"  # block = hide the tool
+    result_action: Literal["off", "warn", "block"] = "warn"
+    args_action: Literal["off", "warn", "block"] = "block"
+    classifier: ClassifierSettings = Field(default_factory=ClassifierSettings)
 
 
 class ContextBudget(_Strict):
@@ -156,6 +169,7 @@ class PolicyFile(_Strict):
     context_budget: ContextBudget = Field(default_factory=ContextBudget)
     approval: ApprovalSettings = Field(default_factory=ApprovalSettings)
     pinning: PinningSettings = Field(default_factory=PinningSettings)
+    scanner: ScannerSettings = Field(default_factory=ScannerSettings)
     rules: list[PolicyRule] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -183,6 +197,7 @@ class AuditSettings(_Strict):
     queue_size: int = Field(default=10_000, gt=0)
     max_payload_bytes: int = Field(default=65_536, gt=0)
     retention_days: int = Field(default=30, gt=0)
+    store_payloads: bool = True  # always redacted first (MP-C3)
 
 
 class ShieldFile(_Strict):
@@ -191,6 +206,8 @@ class ShieldFile(_Strict):
     pricing: str | None = None
     audit: AuditSettings = Field(default_factory=AuditSettings)
     tokenizer: TokenizerSettings = Field(default_factory=TokenizerSettings)
+    refresh_interval_s: float = Field(default=30.0, ge=1)  # re-list upstreams (rug-pull detection)
+    policy_reload_interval_s: float = Field(default=1.0, gt=0)
 
 
 class PricingFile(_Strict):
