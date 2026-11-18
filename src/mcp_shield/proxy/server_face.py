@@ -33,11 +33,25 @@ from mcp_shield.pipeline.context import RequestContext
 from mcp_shield.pipeline.pipeline import Pipeline
 from mcp_shield.proxy import router
 from mcp_shield.proxy.audit_tools import AuditTools
-from mcp_shield.proxy.upstream_pool import UpstreamPool
+from mcp_shield.proxy.upstream_pool import UpstreamPool, is_connection_lost
 from mcp_shield.security.approval import Approver
 from mcp_shield.security.pins import ToolGuard
+from mcp_shield.security.redactor import Redactor
 
 log = logging.getLogger(__name__)
+
+# Methods with their own handler (and their own audit row with tokens) in build_server.
+HANDLED_METHODS = frozenset(
+    {
+        "tools/list",
+        "tools/call",
+        "resources/list",
+        "resources/templates/list",
+        "resources/read",
+        "prompts/list",
+        "prompts/get",
+    }
+)
 
 INSTRUCTIONS = (
     "Tools are provided by several upstream MCP servers through MCP Shield, a security gateway. "
@@ -49,47 +63,41 @@ INSTRUCTIONS = (
 class ConnectionTracker:
     """Maps requests to audit ``connection`` rows (MP-C Connection).
 
-    * ``stdio`` / ``in_process``: one connection per session object.
-    * ``http``: legacy (2025-11-25) traffic is one connection per ``Mcp-Session-Id`` session;
-      2026-07-28 traffic has no session, so it is *grouped* by client info + a hash of the
-      bearer token, with a 30-minute idle window. Grouping is a heuristic for display only.
+    SDK v2 creates a fresh session object for every request, so the stable keys are:
+
+    * legacy (2025-11-25) traffic: the SDK's per-connection ``Connection`` object, one per stdio
+      process or ``Mcp-Session-Id``;
+    * 2026-07-28 traffic, which has no connection by design: a group of client info + a hash
+      of the bearer token, with a 30-minute idle window. Grouping is for display only.
     """
 
     GROUP_IDLE_S = 1800.0
 
     def __init__(self, mode: str):
         self.mode = mode
-        self._by_session: weakref.WeakKeyDictionary[Any, ConnectionRecord] = weakref.WeakKeyDictionary()
+        self._by_conn: weakref.WeakKeyDictionary[Any, ConnectionRecord] = weakref.WeakKeyDictionary()
         self._groups: dict[tuple[str, ...], tuple[ConnectionRecord, float]] = {}
 
     def for_request(self, ctx: ServerRequestContext[Any]) -> ConnectionRecord:
         name, version = _client_info(ctx)
-        if self.mode == "http" and str(ctx.protocol_version) >= "2026-07-28":
-            return self._grouped(ctx, name, version)
-        if self.mode == "http":
-            # SDK v2 hands out a fresh session object per HTTP request; the header is the stable key.
-            headers = getattr(ctx.request, "headers", None)
-            sid = headers.get("mcp-session-id") if headers is not None else None
-            if sid:
-                key = ("legacy", sid)
-                hit = self._groups.get(key)
-                legacy = self._touch(hit[0] if hit else None, ctx, "legacy_session", name, version)
-                self._groups[key] = (legacy, time.monotonic())
-                return legacy
-        kind: ConnectionKind = "legacy_session" if self.mode == "http" else self.mode  # type: ignore[assignment]
-        rec = self._by_session.get(ctx.session)
-        rec = self._touch(rec, ctx, kind, name, version)
-        self._by_session[ctx.session] = rec
-        return rec
+        conn = getattr(ctx.session, "_connection", None)
+        if str(ctx.protocol_version) < "2026-07-28" and conn is not None:
+            kind: ConnectionKind = "legacy_session" if self.mode == "http" else self.mode  # type: ignore[assignment]
+            rec = self._touch(self._by_conn.get(conn), ctx, kind, name, version)
+            self._by_conn[conn] = rec
+            return rec
+        return self._grouped(ctx, name, version)
 
     def _grouped(
         self, ctx: ServerRequestContext[Any], name: str | None, version: str | None
     ) -> ConnectionRecord:
-        key = ("grouped", name or "", version or "", _principal(ctx))
+        kind: ConnectionKind = "grouped" if self.mode == "http" else self.mode  # type: ignore[assignment]
+        key = (kind, name or "", version or "", _principal(ctx))
         now = time.monotonic()
         hit = self._groups.get(key)
-        rec = hit[0] if hit and now - hit[1] < self.GROUP_IDLE_S else None
-        rec = self._touch(rec, ctx, "grouped", name, version)
+        rec = self._touch(
+            hit[0] if hit and now - hit[1] < self.GROUP_IDLE_S else None, ctx, kind, name, version
+        )
         self._groups[key] = (rec, now)
         return rec
 
@@ -119,8 +127,9 @@ class ConnectionTracker:
             }
         )
 
-    def sessions(self) -> list[Any]:
-        return list(self._by_session.keys())
+    def connections(self) -> list[Any]:
+        """Live legacy connections (the only ones a server can push notifications to)."""
+        return list(self._by_conn.keys())
 
 
 def _principal(ctx: ServerRequestContext[Any]) -> str:
@@ -138,6 +147,7 @@ def build_server(
     guard: ToolGuard | None = None,
     approver: Approver | None = None,
     audit_tools: AuditTools | None = None,
+    redactor: Redactor | None = None,
 ) -> Server[Any]:
     meter = pipeline.meter
 
@@ -232,7 +242,13 @@ def build_server(
                 )
             except MCPError as e:
                 rctx.error_code = e.error.code
-                rctx.escalate("error", f"upstream {server_id!r} returned an error: {e.error.message}")
+                if is_connection_lost(e):
+                    pool.mark_failed(server_id, e.error.message)
+                    rctx.escalate(
+                        "error", f"upstream {server_id!r} connection lost; reconnecting, retry shortly"
+                    )
+                else:
+                    rctx.escalate("error", f"upstream {server_id!r} returned an error: {e.error.message}")
                 result = pipeline.denial(rctx)
             except TimeoutError:
                 rctx.escalate("error", f"upstream {server_id!r} timed out after {up.timeout_s:g}s")
@@ -308,7 +324,15 @@ def build_server(
         async def run() -> types.ReadResourceResult:
             if up is None or up.client is None:
                 raise MCPError(INVALID_PARAMS, f"Resource not found: {uri}", {"uri": uri})
-            return await up.client.read_resource(uri)
+            res = await up.client.read_resource(uri)
+            if redactor is None:
+                return res
+            res, found = redactor.redact_resource(res)  # secrets never reach the model (gap #9)
+            for f in found:
+                rctx.add_finding(f)
+            if found:
+                rctx.escalate("warn")
+            return res
 
         async def measure(result: types.ReadResourceResult) -> TokenUsage:
             return meter.usage(response=await meter.resource_contents_tokens(result.contents))
@@ -345,7 +369,15 @@ def build_server(
         async def run() -> types.GetPromptResult:
             if parts is None or up is None or up.client is None or parts[1] not in up.prompts:
                 raise MCPError(INVALID_PARAMS, f"Unknown prompt: {params.name}")
-            return await up.client.get_prompt(parts[1], params.arguments)
+            res = await up.client.get_prompt(parts[1], params.arguments)
+            if redactor is None:
+                return res
+            res, found = redactor.redact_prompt(res)
+            for f in found:
+                rctx.add_finding(f)
+            if found:
+                rctx.escalate("warn")
+            return res
 
         async def measure(result: types.GetPromptResult) -> TokenUsage:
             return meter.usage(response=await meter.prompt_tokens(result))
@@ -391,6 +423,26 @@ def build_server(
                 await _audit_miss(pipeline, rctx)
             raise
 
+    async def audit_protocol(ctx: ServerRequestContext[Any], call_next: CallNext) -> HandlerResult:
+        """Audit every other inbound message: handshake, discovery, ping, notifications (gap #20, MP-C2)."""
+        if ctx.method in HANDLED_METHODS:
+            return await call_next(ctx)
+        rctx = RequestContext(
+            connection=tracker.for_request(ctx),
+            method=ctx.method,
+            protocol_version=ctx.protocol_version,
+            jsonrpc_id=str(ctx.request_id) if ctx.request_id is not None else None,
+        )
+        try:
+            return await call_next(ctx)
+        except MCPError as e:
+            rctx.error_code = e.error.code
+            rctx.escalate("error", e.error.message)
+            raise
+        finally:
+            pipeline.record(rctx)
+
+    server.middleware.append(audit_protocol)
     if approver is not None:
         # Outer: audit what the boundary rejects. Inner: seal/verify approval state (2026-07-28).
         server.middleware.append(audit_rejected_state)
@@ -402,17 +454,22 @@ def build_server(
 
 
 async def notify_list_changed(tracker: ConnectionTracker, kind: str) -> None:
-    """Tell connected clients an aggregated listing changed (best effort per session)."""
-    for session in tracker.sessions():
+    """Tell connected legacy clients an aggregated listing changed (best effort per connection).
+
+    2026-07-28 clients have no push channel; they see changes on their next listing.
+    """
+    method = {
+        "tools": "notifications/tools/list_changed",
+        "resources": "notifications/resources/list_changed",
+        "prompts": "notifications/prompts/list_changed",
+    }.get(kind)
+    if method is None:
+        return
+    for conn in tracker.connections():
         try:
-            if kind == "tools":
-                await session.send_tool_list_changed()
-            elif kind == "resources":
-                await session.send_resource_list_changed()
-            elif kind == "prompts":
-                await session.send_prompt_list_changed()
-        except Exception as e:  # e.g. a 2026-07-28 connection without a listen stream
-            log.debug("could not notify a session of %s change: %s", kind, e)
+            await conn.outbound.notify(method, None)
+        except Exception as e:  # closed connection, transport without a push channel, ...
+            log.debug("could not notify a connection of %s change: %s", kind, e)
 
 
 async def _audit_miss(pipeline: Pipeline, rctx: RequestContext) -> None:
@@ -435,6 +492,8 @@ def _client_info(ctx: ServerRequestContext[Any]) -> tuple[str | None, str | None
         info = raw.get(CLIENT_INFO_META_KEY)
     if info is None and ctx.session.client_params is not None:
         info = ctx.session.client_params.client_info
+    if info is None and ctx.method == "initialize" and isinstance(ctx.params, dict):
+        info = ctx.params.get("clientInfo")  # not stored on the session yet while initialize runs
     if info is None:
         return None, None
     if isinstance(info, dict):

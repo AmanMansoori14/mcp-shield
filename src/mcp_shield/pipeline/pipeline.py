@@ -202,6 +202,10 @@ class Pipeline:
 
     # -- audit ---------------------------------------------------------------------
 
+    def record(self, ctx: RequestContext, result: Any = None) -> None:
+        """Audit a message that carries no tokens (handshake, ping, notifications)."""
+        self._submit(ctx, TokenUsage(tokenizer=self.meter.tokenizer.name), result)
+
     def _submit(self, ctx: RequestContext, usage: TokenUsage, result: Any) -> None:
         try:
             annotate_span(ctx, usage)

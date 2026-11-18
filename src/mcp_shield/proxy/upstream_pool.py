@@ -22,11 +22,12 @@ from typing import Any
 import anyio
 import httpx2
 from anyio.abc import TaskGroup
-from mcp import Client, StdioServerParameters, types
+from mcp import Client, MCPError, StdioServerParameters, types
 from mcp.client.context import ClientRequestContext
 from mcp.client.session import IncomingMessage
 from mcp.client.streamable_http import streamable_http_client
 from mcp.server import Server
+from mcp.types import CONNECTION_CLOSED
 
 from mcp_shield import __version__
 from mcp_shield.config import HttpServer, ServerConfig, StdioServer
@@ -60,6 +61,8 @@ class Upstream:
     prompts: dict[str, types.Prompt] = field(default_factory=dict)
     dropped: list[dict[str, str]] = field(default_factory=list)
     stop: anyio.Event | None = None
+    wake: anyio.Event | None = None  # set on stop, or when a call finds the connection dead
+    restarts: int = 0
 
 
 ChangeCallback = Callable[[str, str], Awaitable[None]]  # (server_id, kind: tools|resources|prompts)
@@ -100,9 +103,18 @@ def _http_transport(url: str, headers: dict[str, str], timeout_s: float) -> _Htt
 
 
 class UpstreamPool:
-    def __init__(self, upstreams: list[Upstream], on_change: ChangeCallback | None = None):
+    def __init__(
+        self,
+        upstreams: list[Upstream],
+        on_change: ChangeCallback | None = None,
+        *,
+        max_restarts: int = 3,
+        backoff_s: float = 1.0,
+    ):
         self.upstreams: dict[str, Upstream] = {u.id: u for u in upstreams}
         self.on_change = on_change
+        self.max_restarts = max_restarts
+        self.backoff_s = backoff_s
         self.backchannel: list[BackchannelEvent] = []
         self._tg: TaskGroup | None = None
 
@@ -138,8 +150,48 @@ class UpstreamPool:
         for up in self.upstreams.values():
             if up.stop is not None:
                 up.stop.set()
+            if up.wake is not None:
+                up.wake.set()
+
+    def mark_failed(self, server_id: str, reason: str) -> None:
+        """A call or listing found the connection dead: wake the session so it reconnects (gap #17)."""
+        up = self.upstreams.get(server_id)
+        if up is None or up.wake is None or up.wake.is_set():
+            return
+        log.warning("upstream %s connection lost: %s", server_id, reason)
+        up.status, up.last_error = "degraded", reason
+        up.wake.set()
 
     async def _run(self, up: Upstream, ready: anyio.Event) -> None:
+        """Keep one upstream connected: reconnect with exponential backoff after a crash (gap #17).
+
+        After ``max_restarts`` consecutive failed connection attempts the upstream stays
+        ``down``; a successful connection resets the counter. Backoff doubles each time.
+        """
+        failures = 0  # consecutive attempts that failed to connect
+        while True:
+            connected, stopped = await self._session(up, ready, reconnect=up.restarts > 0)
+            if stopped:
+                return
+            failures = 0 if connected else failures + 1
+            if failures >= self.max_restarts:
+                log.error(
+                    "upstream %s: giving up after %d failed attempts: %s", up.id, failures, up.last_error
+                )
+                return
+            delay = self.backoff_s * (2**failures)
+            log.warning("upstream %s: reconnecting in %.1fs", up.id, delay)
+            assert up.stop is not None
+            with anyio.move_on_after(delay):
+                await up.stop.wait()
+            if up.stop.is_set():
+                return
+            up.restarts += 1
+
+    async def _session(self, up: Upstream, ready: anyio.Event, *, reconnect: bool) -> tuple[bool, bool]:
+        """One connection lifetime. Returns ``(connected, stopped_cleanly)``."""
+        connected = False
+        up.wake = anyio.Event()
         try:
             target = up.target() if isinstance(up.target, _HttpTransportFactory) else up.target
             client = Client(
@@ -154,15 +206,23 @@ class UpstreamPool:
                 # No fail_after here: the client opens its own cancel scope on enter, which must
                 # not be nested inside a scope we exit first. read_timeout_seconds bounds the probe.
                 up.client = await stack.enter_async_context(client)
+                connected = True
                 up.protocol_version = client.protocol_version
                 up.status, up.last_error = "up", None
                 await self.refresh(up.id)
                 ready.set()
-                assert up.stop is not None
-                await up.stop.wait()
+                if reconnect:
+                    log.info("upstream %s reconnected", up.id)
+                    if self.on_change is not None:
+                        await self.on_change(up.id, "tools")
+                await up.wake.wait()
+                if up.stop is None or not up.stop.is_set():
+                    raise ConnectionError(up.last_error or "connection lost")
+            return connected, True
         except Exception as e:  # includes ExceptionGroup from a crashed transport
             up.last_error = _describe(e)
             log.warning("upstream %s is down: %s", up.id, up.last_error)
+            return connected, bool(up.stop and up.stop.is_set())
         finally:
             up.client, up.status = None, "down"
             ready.set()
@@ -199,6 +259,8 @@ class UpstreamPool:
         except Exception as e:
             up.status, up.last_error = "degraded", _describe(e)
             log.warning("upstream %s listing failed: %s", up.id, up.last_error)
+            if is_connection_lost(e):
+                self.mark_failed(up.id, up.last_error)
 
     def all_tools(self) -> list[tuple[str, types.Tool]]:
         return [(up.id, t) for up in self.upstreams.values() if up.client for t in up.tools.values()]
@@ -284,6 +346,14 @@ async def _all_pages(
         if not cursor:
             break
     return items
+
+
+def is_connection_lost(e: BaseException) -> bool:
+    if isinstance(e, MCPError):
+        return e.error.code == CONNECTION_CLOSED
+    return isinstance(
+        e, (ConnectionError, anyio.ClosedResourceError, anyio.BrokenResourceError, anyio.EndOfStream)
+    )
 
 
 def _describe(e: BaseException) -> str:

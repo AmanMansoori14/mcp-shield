@@ -10,7 +10,7 @@ Every tool call your agent makes is routed, checked, metered and audited, with i
 ![SDK](https://img.shields.io/badge/mcp%20SDK-v2-0f766e)
 ![mypy](https://img.shields.io/badge/mypy-strict-2a6db2)
 ![ruff](https://img.shields.io/badge/lint-ruff-d7ff64)
-![tests](https://img.shields.io/badge/tests-185%20passing-success)
+![tests](https://img.shields.io/badge/tests-194%20passing-success)
 ![coverage](https://img.shields.io/badge/coverage-91%25-brightgreen)
 
 </div>
@@ -71,10 +71,10 @@ flowchart LR
     FC --> AUD
 ```
 
-- **Exactly one audit row per request.** Allowed, blocked, failed and unknown-tool calls alike. A test fires 1,000 mixed requests and checks for 1,000 rows.
+- **Exactly one audit row per message.** Tool calls of every outcome, and also the handshake, discovery, `ping` and notifications. A test fires 1,000 mixed requests and checks for 1,000 rows.
 - **Fail closed.** If a pipeline stage crashes, nothing is forwarded and the verdict is `error`.
 - **The model reads the reason.** Gateway denials are `is_error` tool results with a readable message, not protocol errors only the client app sees.
-- **Isolated upstreams.** A server that's down, slow or malformed never breaks the others.
+- **Isolated upstreams.** A server that's down, slow or malformed never breaks the others. A crashed one reconnects with backoff (3 tries).
 - **No raw secrets on disk.** Request and result payloads are stored only after redaction.
 
 ## Security features
@@ -86,7 +86,7 @@ flowchart LR
 | **Rug-pull detection** | Pins a hash of every tool definition. A changed definition is re-scanned and needs one human approval before use | require approval |
 | **Result scanning** | Flags injected instructions and markdown-image exfiltration in tool output; appends a "treat as data" warning, or blocks | warn |
 | **Argument scanning** | Path traversal, sensitive files (`~/.ssh`, `.env`), shell injection, exfiltration endpoints | block high-severity |
-| **Redaction** | Masks API keys (AWS, GitHub, OpenAI, Anthropic, Slack, Google, Stripe), JWTs, private keys, passwords, emails and phone numbers in results *and* in the audit | on |
+| **Redaction** | Masks API keys (AWS, GitHub, OpenAI, Anthropic, Slack, Google, Stripe), JWTs, private keys, passwords, emails and phone numbers in tool results, resource reads and prompts, *and* in the audit | on |
 | **Human approval** | Destructive tools (by rule, or the upstream's `destructiveHint`, which can only tighten) need a yes from the user. 2026-07-28 clients use multi-round-trip with sealed, expiring state; legacy clients get a live prompt | 5 min expiry |
 | **Context budget** | Warns about, or truncates, tool outputs over a token budget | warn at 4,000 |
 
@@ -342,4 +342,4 @@ The full product requirements live in [`docs/prd/`](docs/prd/):
 [Tasks & evidence](docs/prd/tasks.md) ·
 [PDF](docs/prd/MCP-Shield-PRD.pdf)
 
-Known deviations from the PRD are listed under the *implementation notes* in [`tasks.md`](docs/prd/tasks.md#6-evidence-log).
+Known deviations and the remaining open gaps are listed under *Gap review after wave 3* and the *implementation notes* in [`tasks.md`](docs/prd/tasks.md#6-evidence-log).

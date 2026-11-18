@@ -62,6 +62,8 @@ class Shield:
         retention_days: int | None = 30,
         refresh_interval_s: float = 30.0,
         policy_reload_interval_s: float = 1.0,
+        max_restarts: int = 3,
+        restart_backoff_s: float = 1.0,
     ):
         self.store = AuditStore(db_path)
         self.policy_path = policy_path
@@ -83,7 +85,12 @@ class Shield:
         self.guard = ToolGuard(self.store, self.scanner)
         self.approver = Approver(ttl_s=self.holder.policy.approval.token_ttl_s)
         self.tracker = ConnectionTracker(connection_kind)
-        self.pool = UpstreamPool(upstreams, on_change=self._on_upstream_change)
+        self.pool = UpstreamPool(
+            upstreams,
+            on_change=self._on_upstream_change,
+            max_restarts=max_restarts,
+            backoff_s=restart_backoff_s,
+        )
         self.pipeline = Pipeline(
             self.meter,
             self.audit,
@@ -110,6 +117,7 @@ class Shield:
             guard=self.guard,
             approver=self.approver,
             audit_tools=AuditTools(self.store, self.audit.flush) if audit_tools else None,
+            redactor=self.redactor,
         )
         self.refresh_interval_s = refresh_interval_s
         self.policy_reload_interval_s = policy_reload_interval_s

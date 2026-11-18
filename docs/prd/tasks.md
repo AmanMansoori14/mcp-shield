@@ -163,6 +163,30 @@ notes: The default seal key is per process, which is fine for v1 (one process). 
 | `TS-C8` | `shield_list_requests`, `shield_get_token_usage`, `shield_list_security_events`: read-only annotations, pagination, markdown/json, `outputSchema`, actionable errors, audit flushed before reads; 10-question evaluation with an answer key checked in CI | `src/mcp_shield/proxy/audit_tools.py`, `evals/shield_tools_eval.xml`, `tests/integration/test_audit_tools.py` |
 | `TS-C9` | Verdict, rule IDs, token counts, logical call ID and a `shield.denied` event added to the SDK's span for every message; verified with an in-memory span exporter | `src/mcp_shield/telemetry.py`, `test_spans_carry_shield_decision` |
 
+### Gap review after wave 3
+
+A full check of the code against the PRD. Fixed items carry their test.
+
+| # | PRD said | Status |
+|---|---|---|
+| 9 | Redact everything the model sees | **Fixed.** `resources/read` and `prompts/get` replies are redacted; findings recorded (`test_resource_and_prompt_replies_are_redacted`) |
+| 17 | A down upstream restarts with backoff, 3 tries | **Fixed.** A lost connection (failed call or failed periodic re-list) wakes the session; reconnects with doubling backoff; gives up after 3 failed attempts in a row; a reconnect re-screens tools (`test_crashed_upstream_reconnects`, `test_gives_up_after_max_restarts`) |
+| 20 | Every request audited (MP-C2) | **Fixed.** `initialize`, `notifications/initialized`, `server/discover`, `ping` and other messages are audited by a middleware (`test_every_protocol_message_is_audited`) |
+| – | One connection row per client (MP-C Connection) | **Fixed (bug found during #20).** SDK v2 creates a new session object per request, so wave 1 logged one connection per request. Legacy traffic is now keyed by the SDK's `Connection`; 2026-07-28 traffic is grouped by client info + token on every transport. `list_changed` is pushed through `Connection.outbound` (`test_one_connection_row_per_client`, `test_list_changed_is_pushed_to_legacy_clients`) |
+| 3 | Exact token counts via provider API; ±10% calibration | Open. Needs an API key; the ±10% success marker is not measured |
+| 15 | `shield init` writes sample config (UJ-C1) | Open. Copy `examples/` instead |
+| 16 | `shield check-policy` dry-runs attack fixtures | Open. `shield check` validates files only |
+| 18 | Alert when the spool passes 100 MB | Open |
+| 19 | Context budget per call *or per session* | Open. Per call only |
+| 21 | Explorer filters for connection, protocol, method, min tokens; all filters in the URL | Open. Range, server, verdict, search and sort; only range and request id in the URL |
+| 22 | Click an Overview KPI to drill down | Open |
+| 23 | Click a security event to open the request | Open. Search by the request id instead |
+| 24 | Upstreams page: diff of a changed tool's description; reason for hidden tools | Open. Status only |
+| 25 | Redactor built on `detect-secrets` patterns | Different by choice: own 13 patterns |
+| 26 | Tests use `pytest-asyncio` | Different by choice: anyio's pytest plugin |
+| 27 | Hide the cost tile without a pricing file | Different: shows "–" |
+| 28 | Proof tasks: Claude Desktop smoke, screen recordings, MCP Inspector, fresh-laptop demo under 5 min, first CI run | Open. Verified with the SDK client, curl and real stdio subprocesses only |
+
 ### Wave 3 implementation notes (deviations from the PRD)
 
 - **README GIF:** the README uses static dashboard screenshots instead of an animated GIF. The real `make demo` output is quoted as text.
@@ -178,7 +202,7 @@ notes: The default seal key is per process, which is fine for v1 (one process). 
 - **TS-B4** ships the classifier hook only; no ONNX model is bundled, so it stays in `review`.
 - **TS-B8 Docker compose** is not included: Docker isn't available in the build environment to verify it. `make demo` covers the demo over real stdio.
 - **Rug-pulls on 2026-07-28 upstreams** are caught by a periodic re-listing (`refresh_interval_s`, default 30 s) rather than a `subscriptions/listen` stream.
-- **Redaction in the model path** covers tool results. `resources/read` and `prompts/get` content is redacted in the audit store but not yet in the response.
+- ~~**Redaction in the model path** covers tool results only.~~ Fixed after wave 3: `resources/read` and `prompts/get` replies are redacted too (gap #9).
 
 ### Wave 1 implementation notes (deviations from the PRD)
 
@@ -186,8 +210,8 @@ notes: The default seal key is per process, which is fine for v1 (one process). 
 - **IP-A13, schema-invalid tools:** SDK v2 refuses to send *and* to receive a listing that contains an invalid tool schema, so such an upstream is marked `degraded` as a whole (others are unaffected). Per-tool dropping applies to names Shield can't re-expose (too long once prefixed, or invalid characters).
 - **Provider `count_tokens` adapter** is deferred to the calibration work (TS-C7). tiktoken and the char fallback are implemented; every row records its tokenizer.
 - **Payload storage was off** in wave 1, until the redactor landed in TS-B5 (now on, always redacted first).
-- **List-changed from 2026-07-28 upstreams** needs a `subscriptions/listen` stream; wave 1 handles legacy notifications. Modern change detection comes with tool pinning (TS-B9).
-- **HTTP upstreams** are supported in config and the pool (own credentials only, MP-C8) but have no integration test yet; the HTTP face (TS-C6) will add one.
+- **List-changed from 2026-07-28 upstreams** needs a `subscriptions/listen` stream; wave 1 handles legacy notifications. Now covered by the periodic re-listing from TS-B9.
+- **HTTP upstreams** had no integration test in wave 1; TS-C6 added one (`test_client_token_is_never_forwarded_to_http_upstreams`).
 
 ## 7. Gate Check Before Execution
 

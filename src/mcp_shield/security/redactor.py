@@ -86,6 +86,44 @@ class Redactor:
 
         return walk(value), hits
 
+    def redact_resource(
+        self, result: types.ReadResourceResult
+    ) -> tuple[types.ReadResourceResult, list[Finding]]:
+        """Mask secrets in ``resources/read`` text contents (gap #9: not only tool results)."""
+        hits: Counter[str] = Counter()
+        contents: list[Any] = []
+        for c in result.contents:
+            if isinstance(c, types.TextResourceContents):
+                text, h = self.redact_text(c.text)
+                hits.update(h)
+                contents.append(c.model_copy(update={"text": text}))
+            else:
+                contents.append(c)
+        if not hits:
+            return result, []
+        return result.model_copy(update={"contents": contents}), _findings(hits)
+
+    def redact_prompt(self, result: types.GetPromptResult) -> tuple[types.GetPromptResult, list[Finding]]:
+        """Mask secrets in ``prompts/get`` message text and embedded text resources."""
+        hits: Counter[str] = Counter()
+        messages: list[Any] = []
+        for m in result.messages:
+            c = m.content
+            if isinstance(c, types.TextContent):
+                text, h = self.redact_text(c.text)
+                hits.update(h)
+                messages.append(m.model_copy(update={"content": c.model_copy(update={"text": text})}))
+            elif isinstance(c, types.EmbeddedResource) and isinstance(c.resource, types.TextResourceContents):
+                text, h = self.redact_text(c.resource.text)
+                hits.update(h)
+                res = c.resource.model_copy(update={"text": text})
+                messages.append(m.model_copy(update={"content": c.model_copy(update={"resource": res})}))
+            else:
+                messages.append(m)
+        if not hits:
+            return result, []
+        return result.model_copy(update={"messages": messages}), _findings(hits)
+
     def redact_result(self, result: types.CallToolResult) -> tuple[types.CallToolResult, list[Finding]]:
         hits: Counter[str] = Counter()
         content: list[Any] = []
@@ -110,16 +148,21 @@ class Redactor:
             hits.update(h)
         if not hits:
             return result, []
-        findings = [
-            Finding(
-                stage="redaction",
-                rule_id=f"redaction.{kind}",
-                severity="medium" if kind not in ("email", "phone") else "low",
-                excerpt_redacted=f"{n} occurrence(s) masked",
-            )
-            for kind, n in sorted(hits.items())
-        ]
-        return result.model_copy(update={"content": content, "structured_content": structured}), findings
+        return result.model_copy(update={"content": content, "structured_content": structured}), _findings(
+            hits
+        )
+
+
+def _findings(hits: Counter[str]) -> list[Finding]:
+    return [
+        Finding(
+            stage="redaction",
+            rule_id=f"redaction.{kind}",
+            severity="medium" if kind not in ("email", "phone") else "low",
+            excerpt_redacted=f"{n} occurrence(s) masked",
+        )
+        for kind, n in sorted(hits.items())
+    ]
 
 
 def _masker(p: Pattern, hits: Counter[str]) -> Callable[[re.Match[str]], str]:
