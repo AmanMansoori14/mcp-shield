@@ -29,8 +29,9 @@ async def test_ping_is_answered_locally_for_legacy_clients(make_shield: Any) -> 
     async with make_shield({"notes": notes}, mode="legacy") as (shield, client):
         with pytest.warns(Warning):  # ping is removed in 2026-07-28; the SDK warns on use
             await client.send_ping()
-    # Answered by Shield itself: nothing was forwarded or audited as an upstream call.
-    assert shield.store.scalar("SELECT COUNT(*) FROM requests WHERE method='ping'") == 0
+    # Answered by Shield itself: audited (MP-C2), but never routed to an upstream.
+    row = shield.store.query("SELECT server_id, verdict FROM requests WHERE method='ping'")
+    assert row == [{"server_id": None, "verdict": "allow"}]
 
 
 async def test_upstream_elicitation_is_refused_and_recorded(make_shield: Any, mode: str) -> None:
