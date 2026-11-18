@@ -186,6 +186,8 @@ def test_compose_and_dockerfile_agree() -> None:
     shield_cmd = compose["services"]["shield"]["command"]
     assert "--allow-host" in shield_cmd and "shield:8765" in shield_cmd
     assert all(p.startswith("127.0.0.1:") for s in compose["services"].values() for p in s.get("ports", []))
+    assert "8501/_stcore/health" in " ".join(compose["services"]["dashboard"]["healthcheck"]["test"])
+    assert compose["services"]["demo"]["healthcheck"] == {"disable": True}
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "uv sync --locked --no-dev" in dockerfile and "USER shield" in dockerfile
     assert "mcp_shield.healthcheck" in dockerfile
