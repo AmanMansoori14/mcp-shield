@@ -23,6 +23,11 @@ services:
     command: ["shield", "dashboard", "--config", "examples/docker/shield.yaml", "--address", "0.0.0.0"]
     volumes: ["shield-data:/data"]
     ports: ["127.0.0.1:8501:8501"]
+    healthcheck:  # the image's default check probes the MCP port; the dashboard serves Streamlit
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
     depends_on:
       shield: {condition: service_healthy}
 
@@ -33,6 +38,7 @@ services:
       SHIELD_TOKEN: ${SHIELD_TOKEN:-demo-token-change-me-0123456789}
     depends_on:
       shield: {condition: service_healthy}
+    healthcheck: {disable: true}
     restart: "no"
 
 volumes:
