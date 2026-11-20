@@ -259,6 +259,10 @@ Then list your real servers in `examples/servers.yaml`. The `id` becomes the too
 
 Every upstream's tools appear as `server__tool`, plus Shield's own `shield_*` audit tools. Approvals use the host's elicitation form; a host that can't show one gets a clear denial instead of a silent pass.
 
+| Claude Desktop asks for `../../etc/passwd`: Shield blocks it | Claude asks Shield's own audit tool what was blocked |
+|---|---|
+| ![Claude Desktop calling notes__echo with ../../etc/passwd through Shield; the call fails with "[MCP Shield] Blocked: suspicious arguments (args.path_traversal, args.sensitive_path)" and a request ID](docs/assets/claude-desktop-blocked.png) | ![Claude Desktop calling shield_list_security_events and summarising the last hour's findings by severity: exfiltration instructions, sensitive paths, prompt-injection patterns, path traversal](docs/assets/claude-desktop-audit.png) |
+
 **MCP Inspector:** the same launcher works with the official inspector, in the browser or as a CLI check:
 
 ```bash

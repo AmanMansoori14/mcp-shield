@@ -185,7 +185,7 @@ A full check of the code against the PRD. Fixed items carry their test.
 | 25 | Redactor built on `detect-secrets` patterns | Different by choice: own 13 patterns |
 | 26 | Tests use `pytest-asyncio` | Different by choice: anyio's pytest plugin |
 | 27 | Hide the cost tile without a pricing file | Different: shows "–" |
-| 28 | Proof tasks: Claude Desktop smoke, screen recordings, MCP Inspector, fresh-laptop demo under 5 min | Partly done (2026-11-20): MCP Inspector web UI and CLI against Shield (tools/list, allowed call, blocked traversal, refused hidden tool; screenshot in README); 63 s video from a real run; Claude Desktop config added via `scripts/shield-stdio` and verified with a bare-environment launch. Open: Claude Desktop screenshot, fresh-laptop timing |
+| 28 | Proof tasks: Claude Desktop smoke, screen recordings, MCP Inspector, fresh-laptop demo under 5 min | Partly done (2026-11-20): MCP Inspector web UI and CLI against Shield (tools/list, allowed call, blocked traversal, refused hidden tool; screenshot in README); 63 s video from a real run; Claude Desktop smoke run through `scripts/shield-stdio`: allowed call, blocked path traversal and an audit-tool summary, all audited under client `claude-ai` (screenshots in README). Open: fresh-laptop timing |
 
 ### Wave 3 implementation notes (deviations from the PRD)
 
