@@ -149,12 +149,15 @@ Every row records which tokenizer produced its count. Three choices (`tokenizer.
 git clone <this repo> mcp-shield && cd mcp-shield
 uv sync
 
-# 2. Validate the example config
+# 2. Validate the example config and dry-run attacks against its policy
 uv run shield check --config examples/shield.yaml
+uv run shield check-policy examples/policy.yaml
 
 # 3. Drive Shield the way an MCP host does (stdio subprocess), then read the audit
 make demo
 ```
+
+Starting your own setup? `uv run shield init my-shield` writes a starter `shield.yaml`, `servers.yaml` (the reference filesystem server) and `policy.yaml`, and prints the MCP host config to paste.
 
 Or run everything in containers: Shield over Streamable HTTP, the dashboard, and an MCP client that runs the walkthrough:
 
@@ -272,7 +275,9 @@ servers.yaml:2: servers.0: Input tag 'carrier-pigeon' found using 'transport' do
 | `shield export -c shield.yaml --since 7d --format csv` | Evidence export (CSV or JSON; `--payloads` adds redacted payloads) |
 | `shield prune -c shield.yaml` | Apply audit retention now (it also runs hourly while Shield is up) |
 | `shield calibrate` | Measure the offline token estimate against Claude's `count_tokens` and print `tokenizer.scale` |
+| `shield init [DIR]` | Write a starter config (asks before overwriting; `--force` skips the question) |
 | `shield check -c shield.yaml` | Validate all config files; exit code 2 on errors |
+| `shield check-policy policy.yaml` | Validate a policy and dry-run 12 attack and benign calls through it. `--cases my.yaml` adds your own cases with an `expect`; `--strict` fails CI when an attack gets through |
 | `shield schema` | Export JSON Schemas for the config files |
 
 **Tracing:** Shield adds its decision to the SDK's OpenTelemetry span for every message (`shield.verdict`, `shield.rule_ids`, `shield.tokens.*`, `shield.logical_call_id`, plus a `shield.denied` event). Install an OpenTelemetry SDK and exporter in the process to ship them to Jaeger, Grafana Tempo, Langfuse or similar; without one they cost nothing.

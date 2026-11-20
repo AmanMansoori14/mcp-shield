@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -105,6 +107,45 @@ def range_picker(key: str = "range") -> tuple[str, str | None]:
 
 BUCKET = {"15m": "minute", "1h": "minute", "24h": "hour", "7d": "hour"}
 
+# Pages by url_path, filled by main(); used to jump between pages with filters in the URL.
+NAV: dict[str, Any] = {}
+
+SORTS = ["newest", "tokens", "latency"]
+BLOCKED = ["block", "denied", "expired", "error"]
+
+# Overview KPI → (page, extra query params). Gap #22: every KPI drills down to the rows behind it.
+_DRILLDOWN: dict[str, tuple[str, dict[str, str]]] = {
+    "requests": ("requests", {}),
+    "blocked": ("requests", {"verdict": ",".join(BLOCKED)}),
+    "tokens": ("requests", {"sort": "tokens"}),
+    "cost": ("tokens", {}),
+    "overhead": ("requests", {"sort": "latency"}),
+}
+
+
+def drilldown(kpi: str, range_: str) -> tuple[str, dict[str, str]]:
+    page, params = _DRILLDOWN[kpi]
+    return page, {"range": range_, **params}
+
+
+def open_page(page: str, params: dict[str, str]) -> None:
+    st.switch_page(NAV[page], query_params=params)
+
+
+def filters_from_params(params: Mapping[str, str], servers: list[str]) -> dict[str, Any]:
+    """Requests-page filter values from the URL (?server=fs&verdict=block,denied&sort=tokens&q=rm).
+
+    Unknown values fall back to the defaults, so a hand-edited or stale link never errors.
+    """
+    server = params.get("server", "(any)")
+    order = params.get("sort", "newest")
+    return {
+        "server": server if server in servers else "(any)",
+        "verdicts": [v for v in params.get("verdict", "").split(",") if v in VERDICT_ORDER],
+        "order": order if order in SORTS else "newest",
+        "text": params.get("q", ""),
+    }
+
 
 def empty_state() -> None:
     st.info("No audit data yet. Start Shield and make a few calls:")
@@ -137,6 +178,16 @@ def page_overview() -> None:
     c[2].metric("Tokens (estimated)", f"{o['total_tokens']:,}")
     c[3].metric("Est. cost", f"${o['est_cost_usd']:.4f}" if o["est_cost_usd"] is not None else "–")
     c[4].metric("p95 Shield overhead", f"{o['p95_overhead_ms']} ms")
+    links = {
+        "requests": "All requests →",
+        "blocked": "Blocked and failed →",
+        "tokens": "Biggest token calls →",
+        "cost": "Token analytics →",
+        "overhead": "Slowest calls →",
+    }
+    for col, (kpi, label) in zip(c, links.items(), strict=True):
+        if col.button(label, key=f"kpi-{kpi}", type="tertiary"):
+            open_page(*drilldown(kpi, choice))
 
     rows = pd.DataFrame(q.timeseries(s, since, BUCKET.get(choice, "day")))
     st.subheader("Requests over time", divider="gray")
@@ -178,8 +229,11 @@ def page_overview() -> None:
             )
     with right:
         st.subheader("Latest security events", divider="gray")
-        for e in q.security_events(s, since, "high", 6):
-            st.markdown(f"`{e['last_seen'][11:19]}` **{e['rule_id']}** · {e['count']}× · {e['severity']}")
+        # Gap #23: each event opens the latest request that raised it.
+        for i, e in enumerate(q.security_events(s, since, "high", 6)):
+            label = f"`{e['last_seen'][11:19]}` **{e['rule_id']}** · {e['count']}× · {e['severity']}"
+            if st.button(label, key=f"event-{i}", type="tertiary", help="Open the latest request"):
+                open_page("requests", {"range": choice, "id": e["latest_request_id"]})
 
 
 # --------------------------------------------------------------------------- P2/P3 Requests
@@ -192,13 +246,27 @@ def page_requests() -> None:
         return empty_state()
     if rid := st.query_params.get("id"):
         return request_detail(s, rid)
-    _, since = range_picker()
+    choice, since = range_picker()
     f1, f2, f3, f4 = st.columns([2, 2, 3, 2])
     servers = ["(any)", *sorted(u["server_id"] for u in q.upstreams(s)), "shield"]
+    # First render (e.g. a KPI drill-down or a shared link): start from the URL.
+    for key, value in filters_from_params(st.query_params.to_dict(), servers).items():
+        st.session_state.setdefault(key, value)
     server = f1.selectbox("Server", servers, key="server")
     verdicts = f2.multiselect("Verdict", VERDICT_ORDER, key="verdicts")
     text = f3.text_input("Search tool, rule or request id", key="text")
-    order = f4.selectbox("Sort", ["newest", "tokens", "latency"], key="order")
+    order = f4.selectbox("Sort", SORTS, key="order")
+    wanted = {"range": choice}
+    if server != "(any)":
+        wanted["server"] = server
+    if verdicts:
+        wanted["verdict"] = ",".join(verdicts)
+    if order != "newest":
+        wanted["sort"] = order
+    if text:
+        wanted["q"] = text
+    if st.query_params.to_dict() != wanted:  # keep the URL in step, so the view can be shared
+        st.query_params.from_dict(wanted)
     filters = q.Filters(
         since=since,
         server_id=None if server == "(any)" else server,
@@ -414,7 +482,7 @@ def page_security() -> None:
     st.title("Security events")
     if s is None:
         return empty_state()
-    _, since = range_picker()
+    choice, since = range_picker()
     sev = st.select_slider("Minimum severity", list(q.SEVERITY_RANK), value="medium")
     events = q.security_events(s, since, sev, 100)
     if not events:
@@ -429,14 +497,19 @@ def page_security() -> None:
         "info": "good",
     }
     df["severity"] = df.severity.map(lambda v: f"{VERDICT_ICON[status[v]]} {v}")
-    st.dataframe(
+    picked = st.dataframe(
         df[
             ["severity", "rule_id", "stage", "count", "tools", "first_seen", "last_seen", "latest_request_id"]
         ],
         hide_index=True,
         width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
+        key="events",
     )
-    st.caption("Open a request: Requests page → search for its id.")
+    st.caption("Select a row to open the latest request that raised the event.")
+    if picked.selection.rows:
+        open_page("requests", {"range": choice, "id": df.iloc[picked.selection.rows[0]]["latest_request_id"]})
 
 
 # --------------------------------------------------------------------------- P6 Upstreams & policy
@@ -465,13 +538,12 @@ def page_upstreams() -> None:
 
 def main() -> None:
     setup()
-    nav = st.navigation(
-        [
-            st.Page(page_overview, title="Overview", icon="🛡️", default=True),
-            st.Page(page_requests, title="Requests", icon="📜", url_path="requests"),
-            st.Page(page_tokens, title="Token analytics", icon="🪙", url_path="tokens"),
-            st.Page(page_security, title="Security events", icon="🚨", url_path="security"),
-            st.Page(page_upstreams, title="Upstreams & policy", icon="🔌", url_path="upstreams"),
-        ]
-    )
-    nav.run()
+    pages = {
+        "overview": st.Page(page_overview, title="Overview", icon="🛡️", default=True),
+        "requests": st.Page(page_requests, title="Requests", icon="📜", url_path="requests"),
+        "tokens": st.Page(page_tokens, title="Token analytics", icon="🪙", url_path="tokens"),
+        "security": st.Page(page_security, title="Security events", icon="🚨", url_path="security"),
+        "upstreams": st.Page(page_upstreams, title="Upstreams & policy", icon="🔌", url_path="upstreams"),
+    }
+    NAV.update(pages)
+    st.navigation(list(pages.values())).run()

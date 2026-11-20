@@ -166,6 +166,77 @@ def check(config: ConfigOpt = Path("shield.yaml")) -> None:
 
 
 @app.command()
+def init(
+    directory: Annotated[Path, typer.Argument(help="Where to write the config")] = Path("."),
+    force: Annotated[bool, typer.Option("--force", help="Overwrite existing files without asking")] = False,
+) -> None:
+    """Write a starter shield.yaml, servers.yaml and policy.yaml (asks before overwriting)."""
+    from mcp_shield.init_templates import FILES
+
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, text in FILES.items():
+        path = directory / name
+        if path.exists() and not force and not typer.confirm(f"{path} exists. Overwrite?", default=False):
+            typer.echo(f"  kept    {path}")
+            continue
+        path.write_text(text)
+        typer.secho(f"  wrote   {path}", fg="green")
+    (directory / "sandbox").mkdir(exist_ok=True)
+    cfg = directory / "shield.yaml"
+    typer.echo(
+        "\nNext steps:\n"
+        f"  shield check-policy {directory / 'policy.yaml'}   # dry-run attacks against the policy\n"
+        f"  shield run --config {cfg}           # what your MCP host launches\n"
+        f"  shield dashboard --config {cfg}     # audit dashboard\n"
+        "\nMCP host config (e.g. Claude Desktop):\n"
+        f'  "mcp-shield": {{"command": "shield", "args": ["run", "--config", "{cfg.resolve()}"]}}'
+    )
+
+
+@app.command("check-policy")
+def check_policy(
+    policy: Annotated[Path, typer.Argument(help="policy.yaml to check")] = Path("policy.yaml"),
+    cases: Annotated[
+        Path | None, typer.Option("--cases", help="YAML file of your own cases, each with an expect")
+    ] = None,
+    builtin: Annotated[bool, typer.Option(help="Also run the built-in attack and benign cases")] = True,
+    strict: Annotated[
+        bool, typer.Option("--strict", help="Exit 1 when a built-in attack gets through")
+    ] = False,
+) -> None:
+    """Validate a policy and dry-run tool calls against it. Exit 2 on schema errors, 1 on failed cases."""
+    from mcp_shield.config import PolicyFile, load_yaml_model, policy_hash
+    from mcp_shield.security.policy_check import BUILTIN_CASES, CaseFile, run_cases
+
+    try:
+        parsed = load_yaml_model(policy, PolicyFile)
+        own = load_yaml_model(cases, CaseFile).cases if cases else []
+    except ConfigError as e:
+        typer.secho(str(e), fg="red", err=True)
+        raise typer.Exit(2) from e
+    typer.secho(f"✓ policy is valid · {len(parsed.rules)} rules · hash {policy_hash(parsed)}", fg="green")
+
+    results = run_cases(parsed, own + (BUILTIN_CASES if builtin else []))
+    labels = {"allow": "allowed", "deny": "denied", "require_approval": "approval"}
+    typer.echo(f"\n  {'case':<24} {'kind':<8} {'outcome':<10} why")
+    for r in results:
+        kind = "yours" if r.case.expect else "attack" if r.case.attack else "benign"
+        mark, colour = ("✓", "green") if r.ok else ("⚠" if r.case.expect is None else "✗", "red")
+        typer.secho(f"{mark} {r.case.id:<24} {kind:<8} {labels[r.outcome]:<10}", fg=colour, nl=False)
+        expected = f" (expected {labels[r.case.expect]})" if not r.ok and r.case.expect else ""
+        typer.echo(f" {r.reason}{expected}")
+
+    passed = sum(r.ok for r in results)
+    typer.echo(f"\n{passed}/{len(results)} cases as expected")
+    own_failed = any(not r.ok for r in results if r.case.expect is not None)
+    leaked = [r.case.id for r in results if not r.ok and r.case.expect is None and r.case.attack]
+    if leaked:
+        typer.secho(f"⚠ attacks allowed by this policy: {', '.join(leaked)}", fg="yellow")
+    if own_failed or (strict and leaked):
+        raise typer.Exit(1)
+
+
+@app.command()
 def schema(out: Annotated[Path, typer.Option(help="Directory for *.schema.json")] = Path("schemas")) -> None:
     """Write JSON Schemas for the config files (editor autocompletion)."""
     out.mkdir(parents=True, exist_ok=True)
