@@ -37,7 +37,7 @@ def record(i: int = 0, **kw: object) -> AuditRecord:
 
 def test_migrations_create_schema_and_are_idempotent(tmp_path: Path) -> None:
     store = AuditStore(tmp_path / "a.db")
-    assert store.migrate() == 1
+    assert store.migrate() == 2  # 001 schema, 002 tool-pin detail
     tables = {r["name"] for r in store.query("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {
         "connections",
