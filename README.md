@@ -11,12 +11,12 @@ Every tool call your agent makes is routed, checked, metered and audited, with i
 ![SDK](https://img.shields.io/badge/mcp%20SDK-v2-0f766e)
 ![mypy](https://img.shields.io/badge/mypy-strict-2a6db2)
 ![ruff](https://img.shields.io/badge/lint-ruff-d7ff64)
-![tests](https://img.shields.io/badge/tests-211%20passing-success)
+![tests](https://img.shields.io/badge/tests-248%20passing-success)
 ![coverage](https://img.shields.io/badge/coverage-91%25-brightgreen)
 
 ![A real demo run: poisoned tools hidden, an injection flagged and a leaked key masked, path traversal and schema violations blocked, a destructive call approved, then the audit summary with token counts and security events](docs/assets/demo.gif)
 
-<sub>Recorded from a real `make demo` run with `make gif` · [text of the run](docs/assets/demo-output.txt)</sub>
+<sub>Recorded from a real `make demo` run with `make gif` · [text of the run](docs/assets/demo-output.txt) · [▶ 60-second video: demo run, then the dashboard](docs/assets/mcp-shield-demo.mp4)</sub>
 
 </div>
 
@@ -243,6 +243,31 @@ claude mcp add shield -- uv --directory /path/to/mcp-shield run shield run --con
 
 Then list your real servers in `examples/servers.yaml`. The `id` becomes the tool prefix (`fs__read_file`, `github__create_issue`).
 
+## Use it from an MCP host
+
+`scripts/shield-stdio` starts Shield over stdio from any directory with a working PATH, which is what desktop hosts need (they launch servers with a bare environment). Set `SHIELD_CONFIG` to use your own `shield.yaml`.
+
+**Claude Desktop:** add this to `~/Library/Application Support/Claude/claude_desktop_config.json`, then quit and reopen Claude:
+
+```json
+{
+  "mcpServers": {
+    "mcp-shield": { "command": "/absolute/path/to/mcp-shield/scripts/shield-stdio" }
+  }
+}
+```
+
+Every upstream's tools appear as `server__tool`, plus Shield's own `shield_*` audit tools. Approvals use the host's elicitation form; a host that can't show one gets a clear denial instead of a silent pass.
+
+**MCP Inspector:** the same launcher works with the official inspector, in the browser or as a CLI check:
+
+```bash
+npx @modelcontextprotocol/inspector scripts/shield-stdio                          # web UI
+npx @modelcontextprotocol/inspector --cli scripts/shield-stdio --method tools/list  # CLI
+```
+
+![MCP Inspector connected to Shield over stdio: the tools list, a path-traversal call to notes__echo blocked by Shield, and Shield's stderr log of the two hidden poisoned tools](docs/assets/inspector-blocked.png)
+
 ## Configuration
 
 | File | Purpose |
@@ -349,7 +374,7 @@ src/mcp_shield/
   dashboard/           Streamlit pages (overview, requests, tokens, security, upstreams)
 demo/                  demo upstreams (benign, poisoned, rug-pull, misbehaving), the stdio driver, the audit seeder
 evals/                 evaluation questions for the shield_* tools (mcp-builder format)
-scripts/               make_demo_gif.py: records docs/assets/demo.gif from a real run
+scripts/               make_demo_gif.py (records docs/assets/demo.gif from a real run), shield-stdio (host launcher)
 Dockerfile, docker-compose.yml   container image and the three-service demo
 tests/                 unit + integration (in-memory SDK client, both protocol revisions)
 docs/prd/              the full PRD set (Markdown + PDF + architecture diagram)

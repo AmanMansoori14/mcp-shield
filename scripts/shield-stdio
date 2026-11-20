@@ -1,0 +1,7 @@
+#!/bin/sh
+# Start Shield over stdio from anywhere: Claude Desktop, MCP Inspector, any MCP host.
+# Hosts launch servers with a bare PATH and an unknown working directory, so set both here.
+#   SHIELD_CONFIG=/path/to/shield.yaml scripts/shield-stdio     (default: examples/shield.yaml)
+cd "$(dirname "$0")/.." || exit 1
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+exec uv run --quiet shield run --config "${SHIELD_CONFIG:-examples/shield.yaml}"
