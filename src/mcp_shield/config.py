@@ -20,7 +20,15 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 _ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 SERVER_ID = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
@@ -109,12 +117,21 @@ class ClassifierSettings(_Strict):
     threshold: float = Field(default=0.85, gt=0, le=1)
 
 
+def _yaml_off(value: Any) -> Any:
+    """YAML 1.1 parses a bare ``off`` (or ``no``) as ``false``; here that can only mean "off"."""
+    return "off" if value is False else value
+
+
+# An action that can be switched off. ``true`` stays an error: it doesn't say which action.
+OffAction = Annotated[Literal["off", "warn", "block"], BeforeValidator(_yaml_off)]
+
+
 class ScannerSettings(_Strict):
     """What to do when the injection scanner fires (MP-B3)."""
 
     description_action: Literal["warn", "block"] = "block"  # block = hide the tool
-    result_action: Literal["off", "warn", "block"] = "warn"
-    args_action: Literal["off", "warn", "block"] = "block"
+    result_action: OffAction = "warn"
+    args_action: OffAction = "block"
     classifier: ClassifierSettings = Field(default_factory=ClassifierSettings)
 
 
