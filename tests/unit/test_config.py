@@ -168,3 +168,17 @@ def test_examples_directory_is_valid() -> None:
     root = Path(__file__).resolve().parents[2] / "examples"
     cfg = load_config(root / "shield.yaml", env={})
     assert [s.id for s in cfg.servers.servers] == ["notes", "evil"]
+
+
+@pytest.mark.parametrize("spelling", ["off", "Off", "OFF", "no", '"off"'])
+def test_unquoted_off_means_off(tmp_path: Path, spelling: str) -> None:
+    # YAML 1.1 reads bare off/no as false; for the scanner actions that can only mean "off".
+    p = write(tmp_path, "policy.yaml", f"scanner: {{args_action: {spelling}, result_action: {spelling}}}\n")
+    s = load_yaml_model(p, PolicyFile, env={}).scanner
+    assert s.args_action == "off" and s.result_action == "off"
+
+
+def test_true_is_still_rejected_for_scanner_actions(tmp_path: Path) -> None:
+    p = write(tmp_path, "policy.yaml", "scanner: {args_action: on}\n")
+    with pytest.raises(ConfigError, match=r"policy\.yaml:1: scanner\.args_action"):
+        load_yaml_model(p, PolicyFile, env={})

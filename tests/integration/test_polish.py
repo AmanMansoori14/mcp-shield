@@ -92,7 +92,7 @@ def test_check_policy_schema_error_exits_2(tmp_path: Path) -> None:
 
 def test_check_policy_strict_fails_when_attack_gets_through(tmp_path: Path) -> None:
     lax = tmp_path / "policy.yaml"
-    lax.write_text('version: 1\nscanner: {args_action: "off"}\n')
+    lax.write_text("version: 1\nscanner: {args_action: off}\n")
     assert runner.invoke(cli, ["check-policy", str(lax)]).exit_code == 0  # report only
     r = runner.invoke(cli, ["check-policy", str(lax), "--strict"])
     assert r.exit_code == 1 and "⚠" in r.output
