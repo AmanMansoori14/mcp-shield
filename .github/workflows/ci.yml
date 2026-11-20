@@ -9,8 +9,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
       - name: Install
@@ -28,7 +28,7 @@ jobs:
     # Builds the image and runs the full attack walkthrough in containers (TS-B8).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Build and run the compose demo
         run: docker compose up --build --exit-code-from demo demo
       - name: Show Shield logs on failure

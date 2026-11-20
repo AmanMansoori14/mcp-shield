@@ -27,10 +27,10 @@ kanban
   todo[Todo]
   in_progress[In Progress]
   review[Review]
-    TS-A1
     TS-B4
   blocked[Blocked]
   done[Done]
+    TS-A1
     TS-A2
     TS-A3
     TS-A4
@@ -60,7 +60,7 @@ kanban
 
 | Ref | Wave | Status | Depends on | Source refs | Change | Stacks | Tests | Smoke | Acceptance | Evidence |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `TS-A1` | W1 | review | – | MP-A5 | **problem:** no repo<br>**goal:** uv project, ruff/mypy/pytest, CI, Makefile | uv, GH Actions | S: lint, types<br>I: –<br>E: – | Given a fresh clone, when `make check`, then all checks pass | CI green; badge in README | CI run link |
+| `TS-A1` | W1 | done | – | MP-A5 | **problem:** no repo<br>**goal:** uv project, ruff/mypy/pytest, CI, Makefile | uv, GH Actions | S: lint, types<br>I: –<br>E: – | Given a fresh clone, when `make check`, then all checks pass | CI green; badge in README | CI run link |
 | `TS-A2` | W1 | done | A1 | MP-B1, IP config | **problem:** no typed config<br>**goal:** Pydantic models + loader for servers/policy/shield YAML with line-numbered errors | Pydantic, PyYAML | S: unit valid/invalid<br>I: –<br>E: – | Given a bad `transport`, when loading, then error cites line 4 | Env var `${}` expansion works; JSON Schema exported | Test output |
 | `TS-A3` | W1 | done | A2 | MP-B1, IP-A1, IP-A2, IP-A12 | **problem:** no proxy<br>**goal:** low-level `Server` (SDK v2) serving both protocol revisions; aggregate list/call across N upstreams with `{config_id}__tool` names; validate upstream tools and arguments (IP-A13) | mcp SDK v2, anyio | S: router unit<br>I: in-memory modern + `mode="legacy"` client ↔ Shield ↔ 2 upstreams; malformed upstream tool dropped<br>E: Claude Desktop smoke | Given `fs` and `demo`, when `tools/list`, then `fs__read_file` and `demo__echo` appear | list/call for tools, resources, prompts; upstream errors mapped | Test + screenshot |
 | `TS-A4` | W1 | done | A3 | IP-A11 | **problem:** notifications dropped<br>**goal:** implement the IP-A11 matrix: forward progress, cancelled and change notifications; answer legacy `ping` locally; refuse upstream sampling, elicitation and roots requests | mcp SDK v2 | S: –<br>I: protocol tests per message type, on both revisions<br>E: – | Given an upstream sends `sampling/createMessage`, then it gets an error and a `backchannel_refused` finding is recorded | Pass-through matrix in docs is fully green | Test output |
@@ -135,7 +135,7 @@ notes: The default seal key is per process, which is fine for v1 (one process). 
 
 | Ref | Evidence summary | Location |
 |---|---|---|
-| `TS-A1` | uv project, ruff (lint + format), mypy `--strict`, pytest, `make check` green locally. CI workflow written; stays in `review` until the first GitHub Actions run | `Makefile`, `.github/workflows/ci.yml` |
+| `TS-A1` | uv project, ruff (lint + format), mypy `--strict`, pytest, `make check` green locally. First GitHub Actions run green on 2026-11-20: `check` and `docker` jobs ([run 44741980696](https://github.com/AmanMansoori14/mcp-shield/actions/runs/44741980696)); CI badge in README | `Makefile`, `.github/workflows/ci.yml` |
 | `TS-A2` | Pydantic models for shield/servers/policy/pricing YAML; `${VAR}` / `${VAR:-default}` expansion; errors cite `file:line`; JSON Schema export (`shield schema`); `shield check` exits 2 on errors | `src/mcp_shield/config.py`, `tests/unit/test_config.py` |
 | `TS-A3` | Low-level SDK v2 `Server` serving 2026-07-28 and legacy clients; `{config_id}__tool` namespacing; argument validation against upstream schemas; per-upstream isolation (down, degraded, unexposable names dropped). Every integration test runs on both protocol revisions | `src/mcp_shield/proxy/`, `tests/integration/test_proxy.py` |
 | `TS-A4` | Progress relayed upstream → client; `ping` answered locally; upstream elicitation refused and recorded as `passthrough.backchannel_refused`; list-changed → refresh + snapshot + downstream notification; real stdio subprocess upstream | `tests/integration/test_passthrough.py` |
@@ -185,7 +185,7 @@ A full check of the code against the PRD. Fixed items carry their test.
 | 25 | Redactor built on `detect-secrets` patterns | Different by choice: own 13 patterns |
 | 26 | Tests use `pytest-asyncio` | Different by choice: anyio's pytest plugin |
 | 27 | Hide the cost tile without a pricing file | Different: shows "–" |
-| 28 | Proof tasks: Claude Desktop smoke, screen recordings, MCP Inspector, fresh-laptop demo under 5 min, first CI run | Open. Verified with the SDK client, curl and real stdio subprocesses only |
+| 28 | Proof tasks: Claude Desktop smoke, screen recordings, MCP Inspector, fresh-laptop demo under 5 min | Open (first CI run done 2026-11-20). Verified with the SDK client, curl and real stdio subprocesses only |
 
 ### Wave 3 implementation notes (deviations from the PRD)
 

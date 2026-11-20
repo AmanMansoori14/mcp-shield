@@ -5,6 +5,7 @@
 **A security and observability gateway for Model Context Protocol servers.**
 Every tool call your agent makes is routed, checked, metered and audited, with its token cost.
 
+[![CI](https://github.com/AmanMansoori14/mcp-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/AmanMansoori14/mcp-shield/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-2026--07--28%20%2B%20legacy-0d9488)
 ![SDK](https://img.shields.io/badge/mcp%20SDK-v2-0f766e)
@@ -307,7 +308,7 @@ flowchart LR
 
 | Wave | Tasks | Status |
 |---|---|---|
-| **1 · Foundation** | TS-A1 repo/CI · TS-A2 config · TS-A3 proxy · TS-A4 pass-through · TS-A5 audit · TS-A6 token meter · TS-A7 pipeline | ✅ Done (A1 awaits its first CI run) |
+| **1 · Foundation** | TS-A1 repo/CI · TS-A2 config · TS-A3 proxy · TS-A4 pass-through · TS-A5 audit · TS-A6 token meter · TS-A7 pipeline | ✅ Done |
 | **2 · Security** | TS-B1 policy · TS-B2 hot reload · TS-B3 scanner · TS-B5 redactor · TS-B6 approvals · TS-B7 budget · TS-B8 demo · TS-B9 pinning | ✅ Done (TS-B4 classifier: hook only) |
 | **3 · Visibility** | TS-C1–C4 dashboard · TS-C5 export · TS-C6 HTTP face · TS-C7 README, retention, coverage gate · TS-C8 `shield_*` tools + eval · TS-C9 OpenTelemetry | ✅ Done |
 
