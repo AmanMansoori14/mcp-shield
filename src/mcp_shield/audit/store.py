@@ -203,14 +203,33 @@ class AuditStore:
         *,
         first_seen_at: str | None = None,
         last_changed_at: str | None = None,
+        description: str | None = None,
+        previous_description: str | None = None,
+        reason: str | None = None,
     ) -> None:
+        """Insert or update a pin. ``description`` and ``previous_description`` keep their stored value
+        when passed as None; ``reason`` is always replaced (None clears it)."""
         with self._tx() as db:
             db.execute(
-                """INSERT INTO tool_pins (server_id, tool, def_hash, first_seen_at, last_changed_at, status)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                """INSERT INTO tool_pins (server_id, tool, def_hash, first_seen_at, last_changed_at, status,
+                                          description, previous_description, reason)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(server_id, tool) DO UPDATE SET def_hash=excluded.def_hash, status=excluded.status,
-                    last_changed_at=COALESCE(excluded.last_changed_at, tool_pins.last_changed_at)""",
-                (server_id, tool, def_hash, first_seen_at or now_iso(), last_changed_at, status),
+                    last_changed_at=COALESCE(excluded.last_changed_at, tool_pins.last_changed_at),
+                    description=COALESCE(excluded.description, tool_pins.description),
+                    previous_description=COALESCE(excluded.previous_description, tool_pins.previous_description),
+                    reason=excluded.reason""",
+                (
+                    server_id,
+                    tool,
+                    def_hash,
+                    first_seen_at or now_iso(),
+                    last_changed_at,
+                    status,
+                    description,
+                    previous_description,
+                    reason,
+                ),
             )
 
     def delete_older_than(self, cutoff_iso: str) -> int:

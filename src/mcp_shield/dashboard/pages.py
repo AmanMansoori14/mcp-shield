@@ -5,6 +5,8 @@ shield dashboard -c shield.yaml          # or: SHIELD_DB=path streamlit run app.
 
 from __future__ import annotations
 
+import difflib
+import html
 import json
 import os
 from collections.abc import Mapping
@@ -515,25 +517,84 @@ def page_security() -> None:
 # --------------------------------------------------------------------------- P6 Upstreams & policy
 
 
+def description_diff(old: str, new: str) -> list[tuple[str, str]]:
+    """Word-level diff of two tool descriptions: [(equal|delete|insert, text)], in reading order."""
+    a, b = old.split(), new.split()
+    out: list[tuple[str, str]] = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if op in ("equal", "delete", "replace") and i2 > i1:
+            out.append(("equal" if op == "equal" else "delete", " ".join(a[i1:i2])))
+        if op in ("insert", "replace") and j2 > j1:
+            out.append(("insert", " ".join(b[j1:j2])))
+    return out
+
+
+def diff_html(old: str, new: str) -> str:
+    """Removed words struck through, added words underlined; text stays ink, a tint marks the change.
+    Upstream text is untrusted, so every chunk is escaped."""
+    styles = {
+        "delete": f"background:{STATUS['critical']}22;color:{INK};text-decoration:line-through",
+        "insert": f"background:{STATUS['good']}22;color:{INK};text-decoration:underline",
+    }
+    parts = []
+    for op, text in description_diff(old, new):
+        chunk = html.escape(text)
+        tag = {"delete": "del", "insert": "ins"}.get(op)
+        parts.append(f'<{tag} style="{styles[op]}">{chunk}</{tag}>' if tag else chunk)
+    return " ".join(parts)
+
+
 def page_upstreams() -> None:
     s = store()
     st.title("Upstreams & policy")
     if s is None:
         return empty_state()
+    ups = q.upstreams(s)
     st.subheader("Servers", divider="gray")
-    st.dataframe(pd.DataFrame(q.upstreams(s)), hide_index=True, width="stretch")
+    st.dataframe(pd.DataFrame(ups), hide_index=True, width="stretch")
+    pins = q.tool_pins(s)
+
+    # Gap #24: what changed in a tool's description, and why a tool is hidden.
+    st.subheader("Changed tools", divider="gray")
+    changed = [p for p in pins if p.get("last_changed_at") and p.get("previous_description") is not None]
+    if not changed:
+        st.markdown("No tool definitions have changed since they were first seen.")
+    for p in changed:
+        label = f"◆ {p['server_id']}__{p['tool']} · changed {p['last_changed_at'][:16].replace('T', ' ')}"
+        with st.expander(label, expanded=p["status"] != "pinned"):
+            if p.get("reason"):
+                st.markdown(f"**{p['status']}:** {p['reason']}")
+            old, new = p["previous_description"] or "", p.get("description") or ""
+            if old == new:
+                st.markdown("Description unchanged; the input schema or annotations changed.")
+            else:
+                st.markdown(diff_html(old, new), unsafe_allow_html=True)
+                st.caption("Struck through: removed. Underlined: added. Descriptions are stored redacted.")
+
+    st.subheader("Hidden tools", divider="gray")
+    hidden = [
+        f"✕ **{p['server_id']}__{p['tool']}**: hidden because {html.escape(p.get('reason') or 'it was flagged')}"
+        for p in pins
+        if p["status"] == "hidden"
+    ] + [
+        f"✕ **{u['server_id']}__{d.get('name', '?')}**: dropped by Shield because {html.escape(str(d.get('reason', '')))}"
+        for u in ups
+        for d in u["dropped_tools"]
+    ]
+    st.markdown("\n\n".join(hidden) if hidden else "No hidden tools.")
+
     st.subheader("Tool pins", divider="gray")
-    pins = pd.DataFrame(q.tool_pins(s))
-    if len(pins):
+    if pins:
+        df = pd.DataFrame(pins)
         icons = {"pinned": "✓ pinned", "changed": "◆ changed", "hidden": "✕ hidden"}
-        pins["status"] = pins.status.map(icons)
-        pins["def_hash"] = pins.def_hash.str.slice(0, 12)
-        st.dataframe(pins, hide_index=True, width="stretch")
+        df["status"] = df.status.map(icons)
+        cols = ["server_id", "tool", "status", "reason", "first_seen_at", "last_changed_at"]
+        st.dataframe(df[[c for c in cols if c in df]], hide_index=True, width="stretch")
     st.subheader("Active policy", divider="gray")
-    p = q.current_policy(s)
-    if p:
-        st.caption(f"`{p['hash']}` loaded {p['loaded_at']}")
-        st.code(p["yaml_source"] or "(defaults)", language="yaml")
+    policy = q.current_policy(s)
+    if policy:
+        st.caption(f"`{policy['hash']}` loaded {policy['loaded_at']}")
+        st.code(policy["yaml_source"] or "(defaults)", language="yaml")
 
 
 def main() -> None:

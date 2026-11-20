@@ -7,6 +7,9 @@ decides whether it is only warned about, blocked, or needs approval on next use.
 
 Descriptions are scanned on every listing; with ``scanner.description_action: block``
 a poisoned tool is hidden from clients and any call to it is refused.
+
+The pin row also keeps the latest description, the description before the last change
+(both redacted) and the reason a tool is hidden or flagged, for the Upstreams page (gap #24).
 """
 
 from __future__ import annotations
@@ -14,15 +17,17 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from mcp import types
 
 from mcp_shield.audit.models import Finding, new_id, now_iso
 from mcp_shield.audit.store import AuditStore
+from mcp_shield.security.redactor import Redactor
 from mcp_shield.security.scanner import Scanner
 
 Status = Literal["pinned", "changed", "hidden"]
+CHANGED_REASON = "its definition changed since it was first seen (possible rug-pull)"
 
 
 def definition_hash(tool: types.Tool) -> str:
@@ -43,12 +48,17 @@ class ToolState:
 class ToolGuard:
     """Per-tool security state shared by the server face (hidden / changed / clean)."""
 
-    def __init__(self, store: AuditStore, scanner: Scanner):
+    def __init__(self, store: AuditStore, scanner: Scanner, redactor: Redactor | None = None):
         self.store = store
         self.scanner = scanner
+        self.redactor = redactor or Redactor()
         self.state: dict[tuple[str, str], ToolState] = {}
-        self._pins = {(r["server_id"], r["tool"]): r for r in store.query("SELECT * FROM tool_pins")}
-        self._descriptions: dict[tuple[str, str], str | None] = {}
+        self._pins: dict[tuple[str, str], dict[str, Any]] = {
+            (r["server_id"], r["tool"]): dict(r) for r in store.query("SELECT * FROM tool_pins")
+        }
+
+    def _clean(self, description: str | None) -> str:
+        return self.redactor.redact_text(description or "")[0]
 
     def screen(
         self,
@@ -63,16 +73,20 @@ class ToolGuard:
         for tool in tools:
             key = (server_id, tool.name)
             h = definition_hash(tool)
+            desc = self._clean(tool.description)
             scan = self.scanner.scan_tool_definition(tool.name, tool.description, tool.input_schema)
             state = ToolState()
             pin = self._pins.get(key)
             if pin is None:
-                self._write_pin(server_id, tool.name, h, "pinned", first=True)
+                self._write_pin(server_id, tool.name, h, "pinned", first=True, description=desc)
             elif pin["def_hash"] != h:
-                prev = self._descriptions.get(key)
+                # The description before this change: the stored one, unless this listing was
+                # already recorded (an unaccepted change is seen again on every re-list).
+                stored = pin.get("description")
+                prev = pin.get("previous_description") if stored == desc else stored
                 state.status = "changed"
                 state.previous_description = prev
-                state.reason = "its definition changed since it was first seen (possible rug-pull)"
+                state.reason = CHANGED_REASON
                 state.findings.append(
                     Finding(
                         stage="pinning",
@@ -86,12 +100,38 @@ class ToolGuard:
                     events.append((tool.name, "changed"))
                 # Keep the *old* hash pinned until a human accepts the change (or on_change=warn).
                 if on_change == "warn":
-                    self._write_pin(server_id, tool.name, h, "pinned", changed=True)
+                    self._write_pin(
+                        server_id,
+                        tool.name,
+                        h,
+                        "pinned",
+                        changed=stored != desc,
+                        description=desc,
+                        previous_description=prev,
+                    )
                 else:
-                    self._write_pin(server_id, tool.name, pin["def_hash"], "changed", changed=True)
-            elif pin["status"] == "changed":
-                state.status = "changed"
-                state.reason = "its definition changed since it was first seen (possible rug-pull)"
+                    reason = CHANGED_REASON + (
+                        "; hidden until accepted (pinning.on_change: block)" if on_change == "block" else ""
+                    )
+                    self._write_pin(
+                        server_id,
+                        tool.name,
+                        pin["def_hash"],
+                        "changed",
+                        changed=True,
+                        reason=reason,
+                        description=desc,
+                        previous_description=prev,
+                    )
+            else:
+                if pin["status"] == "changed":
+                    state.status = "changed"
+                    state.reason = CHANGED_REASON
+                    state.previous_description = pin.get("previous_description")
+                if pin.get("description") is None:  # pinned before descriptions were stored
+                    self._write_pin(
+                        server_id, tool.name, h, pin["status"], description=desc, reason=pin.get("reason")
+                    )
             if scan:
                 state.findings.extend(scan.findings)
                 if description_action == "block":
@@ -102,11 +142,10 @@ class ToolGuard:
                         + ")"
                     )
                     events.append((tool.name, "hidden"))
-                    self._set_status(server_id, tool.name, "hidden")
+                    self._set_status(server_id, tool.name, "hidden", state.reason)
             if state.status == "changed" and on_change == "block":
                 state.status = "hidden"
                 events.append((tool.name, "hidden"))
-            self._descriptions[key] = tool.description
             self.state[key] = state
         return events
 
@@ -118,7 +157,13 @@ class ToolGuard:
 
     def accept_change(self, server_id: str, tool: str, tool_def: types.Tool) -> None:
         """After a human approves a changed tool, its new definition becomes the pin."""
-        self._write_pin(server_id, tool, definition_hash(tool_def), "pinned", changed=False)
+        self._write_pin(
+            server_id,
+            tool,
+            definition_hash(tool_def),
+            "pinned",
+            description=self._clean(tool_def.description),
+        )
         self.state[(server_id, tool)] = ToolState()
 
     def listing_findings(self) -> list[Finding]:
@@ -131,7 +176,17 @@ class ToolGuard:
     # -- persistence ---------------------------------------------------------------
 
     def _write_pin(
-        self, server_id: str, tool: str, h: str, status: Status, *, first: bool = False, changed: bool = False
+        self,
+        server_id: str,
+        tool: str,
+        h: str,
+        status: Status,
+        *,
+        first: bool = False,
+        changed: bool = False,
+        description: str | None = None,
+        previous_description: str | None = None,
+        reason: str | None = None,
     ) -> None:
         ts = now_iso()
         self.store.upsert_pin(
@@ -141,17 +196,26 @@ class ToolGuard:
             status,
             first_seen_at=ts if first else None,
             last_changed_at=ts if changed else None,
+            description=description,
+            previous_description=previous_description,
+            reason=reason,
         )
         row = self._pins.get((server_id, tool), {"first_seen_at": ts, "last_changed_at": None})
-        self._pins[(server_id, tool)] = {
+        self._pins[(server_id, tool)] = {  # mirror the upsert's COALESCE rules
             **row,
             "server_id": server_id,
             "tool": tool,
             "def_hash": h,
             "status": status,
+            "last_changed_at": ts if changed else row.get("last_changed_at"),
+            "description": description if description is not None else row.get("description"),
+            "previous_description": previous_description
+            if previous_description is not None
+            else row.get("previous_description"),
+            "reason": reason,
         }
 
-    def _set_status(self, server_id: str, tool: str, status: Status) -> None:
+    def _set_status(self, server_id: str, tool: str, status: Status, reason: str | None) -> None:
         pin = self._pins.get((server_id, tool))
-        if pin is not None and pin["status"] != status:
-            self._write_pin(server_id, tool, pin["def_hash"], status)
+        if pin is not None and (pin["status"] != status or pin.get("reason") != reason):
+            self._write_pin(server_id, tool, pin["def_hash"], status, reason=reason)

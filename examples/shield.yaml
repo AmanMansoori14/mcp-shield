@@ -9,6 +9,7 @@ refresh_interval_s: 30   # re-list upstreams to catch changed tool definitions
 audit:
   db_path: shield-audit.db
   spool_path: shield-audit.spool.jsonl
+  spool_alert_mb: 100     # log an error if the spool (DB not taking writes) grows past this
   retention_days: 30
 
 tokenizer:

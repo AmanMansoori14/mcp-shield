@@ -107,7 +107,7 @@ Scanner quality on the bundled fixtures (`tests/fixtures/`): **12 / 12 attacks c
 |---|---|
 | ![Tokens over time by server, top tools by response tokens, and the per-turn cost of each server's tool definitions](docs/assets/dashboard-tokens.png) | ![One request: verdict, reason, IDs, latency split, with tabs for tokens, findings, redacted payload, policy and approval legs](docs/assets/dashboard-detail.png) |
 
-Pages: **Overview** · **Requests** (filter, sort by tokens or latency, open a request, export the view) · **Token analytics** · **Security events** · **Upstreams & policy** (server health, tool pins with `changed`/`hidden` status, the active policy). Colors follow a validated palette: one color per server everywhere, and status colors (allowed / warned / pending / blocked) are always paired with an icon and a label.
+Pages: **Overview** · **Requests** (filter, sort by tokens or latency, open a request, export the view) · **Token analytics** · **Security events** · **Upstreams & policy** (server health, a word-level diff of every changed tool description, why each tool is hidden, tool pins, the active policy). Colors follow a validated palette: one color per server everywhere, and status colors (allowed / warned / pending / blocked) are always paired with an icon and a label.
 
 ## Ask the agent about its own audit
 

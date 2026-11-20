@@ -213,6 +213,7 @@ class TokenizerSettings(_Strict):
 class AuditSettings(_Strict):
     db_path: str = "shield-audit.db"
     spool_path: str = "shield-audit.spool.jsonl"
+    spool_alert_mb: int = Field(default=100, gt=0)  # log an error once the spool grows past this
     queue_size: int = Field(default=10_000, gt=0)
     max_payload_bytes: int = Field(default=65_536, gt=0)
     retention_days: int = Field(default=30, gt=0)

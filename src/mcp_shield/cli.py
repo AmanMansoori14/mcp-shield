@@ -267,6 +267,16 @@ def stats(
         f"  requests {total['n']:,} · blocked/errors {total['blocked'] or 0:,} · "
         f"tokens {total['tok']:,} (estimated) · est. cost ${total['cost']:.4f}\n"
     )
+    spool = cfg.resolve(cfg.shield.audit.spool_path)
+    if spool.exists():  # records the DB could not take yet (gap #18)
+        mb = spool.stat().st_size / 2**20
+        over = mb >= cfg.shield.audit.spool_alert_mb
+        typer.secho(
+            f"  {'⚠ ' if over else ''}spool {spool.name}: {mb:.1f} MB waiting to back-fill into the DB"
+            + (f" (over the {cfg.shield.audit.spool_alert_mb} MB alert)" if over else "")
+            + "\n",
+            fg="red" if over else "yellow",
+        )
     typer.secho("  Top tools by response tokens", bold=True)
     for r in store.query("""SELECT r.tool, COUNT(*) calls, SUM(t.response_tokens) resp, AVG(r.latency_ms) ms
                             FROM requests r JOIN token_usage t ON t.request_id=r.id

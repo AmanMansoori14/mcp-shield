@@ -56,6 +56,7 @@ class Shield:
         offload_bytes: int = 32_768,
         input_price_per_million: float | None = None,
         queue_size: int = 10_000,
+        spool_alert_mb: int = 100,
         store_payloads: bool = True,
         connection_kind: str = "stdio",
         audit_tools: bool = True,
@@ -73,7 +74,9 @@ class Shield:
             str(policy_path) if policy_path else None,
             policy_path.read_text() if policy_path and policy_path.exists() else None,
         )
-        self.audit = AuditLogger(self.store, spool_path, queue_size)
+        self.audit = AuditLogger(
+            self.store, spool_path, queue_size, spool_alert_bytes=spool_alert_mb * 1024 * 1024
+        )
         self.meter = Meter(
             tokenizer or make_tokenizer(),
             image_tokens=image_tokens,
@@ -82,7 +85,7 @@ class Shield:
         )
         self.scanner = Scanner()
         self.redactor = Redactor()
-        self.guard = ToolGuard(self.store, self.scanner)
+        self.guard = ToolGuard(self.store, self.scanner, self.redactor)
         self.approver = Approver(ttl_s=self.holder.policy.approval.token_ttl_s)
         self.tracker = ConnectionTracker(connection_kind)
         self.pool = UpstreamPool(
@@ -142,6 +145,7 @@ class Shield:
             offload_bytes=cfg.shield.tokenizer.offload_bytes,
             input_price_per_million=cfg.pricing.input_per_million if cfg.pricing else None,
             queue_size=cfg.shield.audit.queue_size,
+            spool_alert_mb=cfg.shield.audit.spool_alert_mb,
             store_payloads=cfg.shield.audit.store_payloads,
             connection_kind=connection_kind,
             audit_tools=cfg.shield.audit_tools,

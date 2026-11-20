@@ -5,6 +5,10 @@ buffer drained by one background task that writes on a worker thread. If the
 buffer is full, or a write fails (DB locked, read-only, disk full), the record is
 appended to a JSONL spool instead. The spool is replayed into the DB on the next
 start, so no record is lost (MP-C2).
+
+A growing spool means the DB has stopped accepting writes, so once it passes
+``spool_alert_bytes`` (``audit.spool_alert_mb``, 100 MB by default) an error is logged:
+once per crossing, again only after a back-fill brings it back under (gap #18).
 """
 
 from __future__ import annotations
@@ -25,10 +29,19 @@ log = logging.getLogger(__name__)
 
 
 class AuditLogger:
-    def __init__(self, store: AuditStore, spool_path: Path | str, queue_size: int = 10_000):
+    def __init__(
+        self,
+        store: AuditStore,
+        spool_path: Path | str,
+        queue_size: int = 10_000,
+        *,
+        spool_alert_bytes: int = 100 * 1024 * 1024,
+    ):
         self.store = store
         self.spool_path = Path(spool_path)
         self.queue_size = queue_size
+        self.spool_alert_bytes = spool_alert_bytes
+        self.spool_alerting = False
         self._send: MemoryObjectSendStream[AuditRecord] | None = None
         self._recv: MemoryObjectReceiveStream[AuditRecord] | None = None
         self._spool_lock = threading.Lock()
@@ -94,7 +107,23 @@ class AuditLogger:
         line = rec.model_dump_json() + "\n"
         with self._spool_lock, self.spool_path.open("a", encoding="utf-8") as f:
             f.write(line)
+            size = f.tell()
         self.spooled += 1
+        self._check_spool(size)
+
+    def _check_spool(self, size: int) -> None:
+        if size < self.spool_alert_bytes:
+            self.spool_alerting = False
+            return
+        if not self.spool_alerting:
+            self.spool_alerting = True
+            log.error(
+                "audit spool %s is %.1f MB (alert at %.0f MB): the audit DB is not accepting writes. "
+                "Check disk space and file locks; records are safe and back-fill on the next start.",
+                self.spool_path,
+                size / 2**20,
+                self.spool_alert_bytes / 2**20,
+            )
 
     def backfill(self) -> int:
         """Replay the spool into the DB. Inserts are idempotent (INSERT OR IGNORE on record ids)."""
@@ -116,6 +145,7 @@ class AuditLogger:
                 self.spool_path.write_text("\n".join(remaining) + "\n", encoding="utf-8")
             else:
                 self.spool_path.unlink()
+        self._check_spool(self.spool_path.stat().st_size if self.spool_path.exists() else 0)
         if replayed:
             log.info("backfilled %d audit records from %s", replayed, self.spool_path)
         return replayed

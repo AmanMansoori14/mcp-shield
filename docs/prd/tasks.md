@@ -176,12 +176,12 @@ A full check of the code against the PRD. Fixed items carry their test.
 | 3 | Exact token counts via provider API; ±10% calibration | **Built, measurement pending.** `tokenizer.kind: anthropic` (cached `count_tokens`, fallback with a circuit breaker), `tokenizer.scale` for the offline estimate, and `shield calibrate`. Tested against a fake `count_tokens`; the real ±10% check needs credentials (`ant auth login` or `ANTHROPIC_API_KEY`) and one `make calibrate` run |
 | 15 | `shield init` writes sample config (UJ-C1) | Done. Writes shield/servers/policy.yaml and `sandbox/`, asks before overwriting (`--force`), prints next steps and the host config |
 | 16 | `shield check-policy` dry-runs attack fixtures | Done. Policy engine + argument scanner over 12 built-in cases (9 attacks, 3 benign) and your own `--cases` file; exit 2 schema error, 1 failed case, `--strict` for leaked attacks |
-| 18 | Alert when the spool passes 100 MB | Open |
+| 18 | Alert when the spool passes 100 MB | Done. One error log when the spool crosses `audit.spool_alert_mb` (100 by default), again only after a back-fill brings it under; `shield stats` shows the pending spool size |
 | 19 | Context budget per call *or per session* | Open. Per call only |
 | 21 | Explorer filters for connection, protocol, method, min tokens; all filters in the URL | Partly done. All current filters (range, server, verdict, search, sort) now live in the URL; connection, protocol, method and min-tokens filters still open |
 | 22 | Click an Overview KPI to drill down | Done. Each KPI links to the rows behind it (blocked → verdict filter, tokens/overhead → sort, cost → Token analytics); Requests filters read from and write to the URL |
 | 23 | Click a security event to open the request | Done. Overview events and Security-page rows open the latest request that raised them |
-| 24 | Upstreams page: diff of a changed tool's description; reason for hidden tools | Open. Status only |
+| 24 | Upstreams page: diff of a changed tool's description; reason for hidden tools | Done. Pins keep the latest and previous description (redacted) and the reason (migration 002), so the diff survives restarts; word-level diff and hidden/dropped reasons on the Upstreams page |
 | 25 | Redactor built on `detect-secrets` patterns | Different by choice: own 13 patterns |
 | 26 | Tests use `pytest-asyncio` | Different by choice: anyio's pytest plugin |
 | 27 | Hide the cost tile without a pricing file | Different: shows "–" |
