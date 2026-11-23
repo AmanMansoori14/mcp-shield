@@ -19,7 +19,7 @@ BENIGN: dict[str, list[str]] = json.loads((FIXTURES / "benign.json").read_text()
 def test_every_attack_fixture_is_caught(attack: dict[str, Any]) -> None:
     s = Scanner()
     if attack["target"] == "args":
-        res = s.scan_arguments({"value": attack["text"]})
+        res = s.scan_arguments({attack.get("arg", "value"): attack["text"]})
     else:
         res = s.scan(attack["text"], attack["target"])
     assert attack["expect"] in {f.rule_id for f in res.findings}
@@ -45,7 +45,7 @@ def test_precision_recall_summary() -> None:
         in {
             f.rule_id
             for f in (
-                s.scan_arguments({"v": a["text"]})
+                s.scan_arguments({a.get("arg", "v"): a["text"]})
                 if a["target"] == "args"
                 else s.scan(a["text"], a["target"])
             ).findings
