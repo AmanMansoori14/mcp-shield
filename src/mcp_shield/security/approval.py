@@ -9,8 +9,11 @@
            (``approved``) or refuses (``denied`` / ``expired``).
 
 ``request_state`` is sealed by the SDK's ``RequestStateBoundary`` (installed in
-server_face), so the client can't forge or edit it. Legacy 2025-11-25 clients get
-a live ``elicitation/create`` inside the single request instead.
+server_face), so the client can't forge or edit it. Sealing doesn't stop a client from
+sending the *same* state again, so each approval is single-use: the logical call id is
+remembered until the approval would have expired, and a second leg 2 with it is
+refused (``approval.replayed``). One human answer, one call. Legacy 2025-11-25 clients
+get a live ``elicitation/create`` inside the single request instead.
 """
 
 from __future__ import annotations
@@ -77,6 +80,16 @@ class Approver:
     def __init__(self, ttl_s: float = 300.0, clock: Any = time.time):
         self.ttl_s = ttl_s
         self.clock = clock
+        self._used: dict[str, float] = {}  # logical call id -> when its approval would expire
+
+    def _consume(self, logical_call_id: str, issued_at: float) -> bool:
+        """Mark an approval as answered. False if it was already answered (a replay)."""
+        now = self.clock()
+        self._used = {lc: exp for lc, exp in self._used.items() if exp > now}
+        if logical_call_id in self._used:
+            return False
+        self._used[logical_call_id] = issued_at + self.ttl_s
+        return True
 
     def prepare_retry(self, rctx: RequestContext, params: types.CallToolRequestParams) -> None:
         """On leg 2, adopt leg 1's logical call id so both rows link (and args aren't counted twice)."""
@@ -134,6 +147,11 @@ class Approver:
             rctx.escalate(
                 "expired",
                 f"approval expired ({self.ttl_s:g}s); call the tool again to request a new approval",
+            )
+        elif not self._consume(str(state["lc"]), float(state["iat"])):
+            rctx.add_finding(Finding(stage="approval", rule_id="approval.replayed", severity="high"))
+            rctx.escalate(
+                "denied", "this approval was already used; call the tool again to request a new approval"
             )
         else:
             self._apply_answer(rctx, answer)

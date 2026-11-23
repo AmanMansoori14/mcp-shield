@@ -1,6 +1,6 @@
 # Security policy. Edits are hot-reloaded; an invalid file keeps the previous policy.
 version: 1
-defaults: { action: allow, fail_open: false }
+defaults: { action: allow }   # internal errors always block (fail-closed)
 context_budget: { per_call_tokens: 4000, on_exceed: warn }
 approval: { token_ttl_s: 300, approve_destructive: true }
 pinning: { on_change: require_approval }

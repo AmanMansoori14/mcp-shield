@@ -1,7 +1,10 @@
 """Policy engine and hot reload (TS-B1, TS-B2, MP-B2, IP-A17).
 
 Rules match on server id and upstream tool name (globs), optionally on one argument
-(path glob / not-glob / regex). Every matching rule contributes; the strictest action
+(path glob / not-glob / regex). The argument is found at the top level *and* nested inside
+objects, and lists are checked element by element: the condition holds if any value meets it
+(so a deny rule can't be dodged by wrapping a path in a list or an options object).
+Resource reads are evaluated as the tool ``read_resource`` with the argument ``uri``. Every matching rule contributes; the strictest action
 wins: ``deny`` > ``require_approval`` > ``allow``. When no rule with an action
 matches, ``defaults.action`` applies.
 
@@ -45,11 +48,19 @@ class _Window:
 
 
 class PolicyEngine:
-    def __init__(self, policy: PolicyFile, clock: Callable[[], float] = time.monotonic):
+    def __init__(
+        self,
+        policy: PolicyFile,
+        clock: Callable[[], float] = time.monotonic,
+        windows: dict[str, _Window] | None = None,
+    ):
         self.policy = policy
         self.hash = policy_hash(policy)
         self._clock = clock
-        self._windows: dict[str, _Window] = {}
+        # Rate-limit windows, by rule id. A hot reload passes the old ones in, so editing the
+        # policy doesn't reset every limit.
+        ids = {r.id for r in policy.rules if r.rate_limit is not None}
+        self._windows: dict[str, _Window] = {k: v for k, v in (windows or {}).items() if k in ids}
 
     def evaluate(
         self,
@@ -58,7 +69,10 @@ class PolicyEngine:
         arguments: dict[str, Any] | None,
         *,
         destructive_hint: bool | None = None,
+        count_rate: bool = True,
     ) -> Decision:
+        """``count_rate=False`` checks rules without spending rate-limit budget (an approval's
+        second leg repeats a call that was already counted)."""
         args = arguments or {}
         best: Action | None = None
         rule_ids: list[str] = []
@@ -68,7 +82,7 @@ class PolicyEngine:
         for rule in self.policy.rules:
             if not _matches(rule, server_id, tool, args):
                 continue
-            if rule.rate_limit is not None and not self._allow_rate(rule):
+            if rule.rate_limit is not None and count_rate and not self._allow_rate(rule):
                 rate_limited = True
                 rule_ids.append(rule.id)
                 best = "deny"
@@ -126,17 +140,50 @@ def _matches(rule: PolicyRule, server_id: str, tool: str, args: dict[str, Any]) 
         fnmatch.fnmatchcase(tool, t) or fnmatch.fnmatchcase(prefixed, t) for t in tools
     ):
         return False
+    return rule.when is None or _matching_value(rule, args) is not None
+
+
+def arg_values(args: Any, name: str) -> list[str]:
+    """Every value of argument ``name``: top level and nested in objects, lists flattened."""
+    found: list[str] = []
+
+    def leaves(v: Any) -> None:
+        if isinstance(v, list):
+            for item in v:
+                leaves(item)
+        elif isinstance(v, dict):
+            walk(v)
+        elif v is not None:
+            found.append(v if isinstance(v, str) else str(v))
+
+    def walk(obj: Any) -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k == name:
+                    leaves(v)
+                elif isinstance(v, (dict, list)):
+                    walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(args)
+    return found
+
+
+def _matching_value(rule: PolicyRule, args: dict[str, Any]) -> str | None:
     when = rule.when
     if when is None:
-        return True
-    if when.arg not in args:
-        return False
-    value = str(args[when.arg])
-    if when.glob is not None and not path_match(value, when.glob):
-        return False
-    if when.not_glob is not None and path_match(value, when.not_glob):
-        return False
-    return not (when.regex is not None and not re.search(when.regex, value))
+        return None
+    for value in arg_values(args, when.arg):
+        if when.glob is not None and not path_match(value, when.glob):
+            continue
+        if when.not_glob is not None and path_match(value, when.not_glob):
+            continue
+        if when.regex is not None and not re.search(when.regex, value):
+            continue
+        return value
+    return None
 
 
 def _reason(rule: PolicyRule, args: dict[str, Any]) -> str:
@@ -144,10 +191,11 @@ def _reason(rule: PolicyRule, args: dict[str, Any]) -> str:
         rule.action or "allow"
     ]
     detail = ""
-    if rule.when is not None and rule.when.arg in args:
+    value = _matching_value(rule, args) if rule.when is not None else None
+    if rule.when is not None and value is not None:
         pattern = rule.when.not_glob or rule.when.glob or rule.when.regex
         relation = "is outside" if rule.when.not_glob else "matches"
-        detail = f" ({rule.when.arg} {str(args[rule.when.arg])!r} {relation} {pattern!r})"
+        detail = f" ({rule.when.arg} {value!r} {relation} {pattern!r})"
     return f"{verb} by rule {rule.id}{detail}"
 
 
@@ -213,7 +261,7 @@ class PolicyHolder:
         self.last_error = None
         if policy_hash(new) == self.hash:
             return False
-        self.engine = PolicyEngine(new)
+        self.engine = PolicyEngine(new, windows=self.engine._windows)
         log.info("policy reloaded: %s", self.hash)
         if self.on_swap:
             self.on_swap(self.engine, self.path.read_text())

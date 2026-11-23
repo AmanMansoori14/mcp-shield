@@ -20,14 +20,15 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Protocol
 
-from mcp import types
+from mcp import MCPError, types
+from mcp.types import INVALID_REQUEST
 from pydantic import BaseModel
 
 from mcp_shield import __version__
 from mcp_shield.audit.logger import AuditLogger
 from mcp_shield.audit.models import AuditRecord, Finding, TokenRecord
 from mcp_shield.metering.meter import Meter, TokenUsage, canonical_json
-from mcp_shield.pipeline.context import RequestContext
+from mcp_shield.pipeline.context import STOPPING, RequestContext
 from mcp_shield.telemetry import annotate_span
 
 log = logging.getLogger(__name__)
@@ -51,9 +52,15 @@ class PostStage(Protocol):
     async def __call__(self, ctx: RequestContext, result: types.CallToolResult) -> types.CallToolResult: ...
 
 
-STOPPING = {"block", "denied", "expired", "approval_pending", "error"}
-
 Approve = Callable[[RequestContext], Awaitable[types.InputRequiredResult | None]]
+
+
+class ShieldRefusal(MCPError):
+    """Shield refused a resource read or prompt. Raised to the client as a JSON-RPC error,
+    but the audit keeps Shield's own verdict (block / denied) instead of ``error``."""
+
+
+ReadScan = Callable[[RequestContext, list[str]], "str | None"]
 
 
 class Pipeline:
@@ -67,7 +74,8 @@ class Pipeline:
         max_payload_bytes: int = 65_536,
         pre_stages: Sequence[PreStage] = (),
         post_stages: Sequence[PostStage] = (),
-        fail_open: bool = False,
+        read_stages: Sequence[PreStage] = (),
+        read_scan: ReadScan | None = None,
         redact: Callable[[Any], Any] | None = None,
     ):
         self.meter = meter
@@ -77,7 +85,10 @@ class Pipeline:
         self.max_payload_bytes = max_payload_bytes
         self.pre_stages = list(pre_stages)
         self.post_stages = list(post_stages)
-        self.fail_open = fail_open
+        # Resource reads and prompts get the same pre-call checks (policy, argument scan) and
+        # the same scan of what comes back as tool calls do.
+        self.read_stages = list(read_stages)
+        self.read_scan = read_scan
         self.redact = redact
 
     # -- tools/call ----------------------------------------------------------
@@ -153,8 +164,8 @@ class Pipeline:
         finally:
             self._submit(ctx, usage, result)
 
-    def denial(self, ctx: RequestContext) -> types.CallToolResult:
-        """A tool result the *model* can read (MP-C10), with machine-readable details in ``_meta``."""
+    @staticmethod
+    def denial_text(ctx: RequestContext) -> str:
         label = {
             "block": "Blocked",
             "denied": "Denied",
@@ -163,7 +174,11 @@ class Pipeline:
             "approval_pending": "Approval required",
         }.get(ctx.verdict, ctx.verdict)
         reason = f": {ctx.reason}" if ctx.reason else ""
-        text = f"[MCP Shield] {label}{reason}. Request ID {ctx.request_id}."
+        return f"[MCP Shield] {label}{reason}. Request ID {ctx.request_id}."
+
+    def denial(self, ctx: RequestContext) -> types.CallToolResult:
+        """A tool result the *model* can read (MP-C10), with machine-readable details in ``_meta``."""
+        text = self.denial_text(ctx)
         meta = {
             SHIELD_META: {
                 "verdict": ctx.verdict,
@@ -174,6 +189,33 @@ class Pipeline:
         result = types.CallToolResult(content=[types.TextContent(type="text", text=text)], is_error=True)
         result.meta = meta
         return result
+
+    # -- resource reads and prompts ------------------------------------------------
+
+    async def screen(self, ctx: RequestContext) -> None:
+        """Pre-call checks for a resource read or prompt. Raises ``ShieldRefusal`` when refused."""
+        for stage in self.read_stages:
+            with ctx.stage(stage.name):
+                await stage(ctx)
+            if ctx.verdict in STOPPING:
+                break
+        if ctx.verdict not in STOPPING and ctx.needs_approval:
+            ctx.escalate("block", f"{ctx.approval_reason}; resource reads and prompts can't ask for approval")
+        self.raise_if_stopped(ctx)
+
+    def scan_read(self, ctx: RequestContext, strings: list[str]) -> str | None:
+        """Scan what a resource read or prompt returns. Returns a warning to show the model, if any."""
+        if self.read_scan is None:
+            return None
+        with ctx.stage("scan.result"):
+            notice = self.read_scan(ctx, strings)
+        self.raise_if_stopped(ctx)
+        return notice
+
+    def raise_if_stopped(self, ctx: RequestContext) -> None:
+        if ctx.verdict in STOPPING:
+            ctx.error_code = INVALID_REQUEST
+            raise ShieldRefusal(INVALID_REQUEST, self.denial_text(ctx), {"request_id": ctx.request_id})
 
     # -- everything else (lists, reads, prompts) --------------------------------
 
@@ -193,6 +235,8 @@ class Pipeline:
             with ctx.stage("meter.response"):
                 usage = await measure(result)
             return result
+        except ShieldRefusal:
+            raise  # verdict and reason already set by the check that refused
         except Exception as e:
             ctx.escalate("error", str(e) or type(e).__name__)
             ctx.error_code = getattr(getattr(e, "error", None), "code", None)

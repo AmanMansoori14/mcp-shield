@@ -52,7 +52,13 @@ PATTERNS: tuple[Pattern, ...] = (
     Pattern(
         "phone",
         re.compile(
-            r"(?<!\w)(?:\+?\d{1,3}[\s.\-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.\-]\d{3,4}[\s.\-]\d{3,4}(?!\w)"
+            # Phone-shaped only: a +country code, a (415) area code, or 3-3-4 digits with one
+            # consistent separator. IPs, versions, card-like and order numbers are left alone.
+            r"(?<![\w.+])(?:"
+            r"\+\d{1,3}[\s.\-]?(?:\(\d{1,4}\)|\d{1,4})(?:[\s.\-]\d{2,4}){2,3}"
+            r"|\(\d{3}\)\s?\d{3}[\s.\-]\d{4}"
+            r"|\d{3}([\s.\-])\d{3}\1\d{4}"
+            r")(?![\w.])"
         ),
         0,
     ),

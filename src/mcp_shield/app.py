@@ -94,6 +94,9 @@ class Shield:
             max_restarts=max_restarts,
             backoff_s=restart_backoff_s,
         )
+        policy_stage = PolicyStage(self.holder)
+        arg_scan = ArgScanStage(self.scanner, self.holder)
+        result_scan = ResultScanStage(self.scanner, self.holder)
         self.pipeline = Pipeline(
             self.meter,
             self.audit,
@@ -103,11 +106,13 @@ class Shield:
             pre_stages=[
                 GuardStage(self.guard, self.holder),
                 SchemaStage(),
-                PolicyStage(self.holder),
-                ArgScanStage(self.scanner, self.holder),
+                policy_stage,
+                arg_scan,
             ],
+            read_stages=[policy_stage, arg_scan],
+            read_scan=result_scan.inspect,
             post_stages=[
-                ResultScanStage(self.scanner, self.holder),
+                result_scan,
                 RedactStage(self.redactor),
                 BudgetStage(self.meter, self.holder),
             ],

@@ -11,7 +11,7 @@ Every tool call your agent makes is routed, checked, metered and audited, with i
 ![SDK](https://img.shields.io/badge/mcp%20SDK-v2-0f766e)
 ![mypy](https://img.shields.io/badge/mypy-strict-2a6db2)
 ![ruff](https://img.shields.io/badge/lint-ruff-d7ff64)
-![tests](https://img.shields.io/badge/tests-248%20passing-success)
+![tests](https://img.shields.io/badge/tests-283%20passing-success)
 ![coverage](https://img.shields.io/badge/coverage-91%25-brightgreen)
 
 ![A real demo run: poisoned tools hidden, an injection flagged and a leaked key masked, path traversal and schema violations blocked, a destructive call approved, then the audit summary with token counts and security events](docs/assets/demo.gif)
@@ -86,16 +86,16 @@ flowchart LR
 
 | Protection | What it does | Default |
 |---|---|---|
-| **Policy engine** | Allow/deny/approval rules on server, tool and arguments (path globs are normalised, so `./sandbox/../../etc` can't escape). Rate limits. Hot-reloaded; an invalid edit keeps the previous policy | allow all |
+| **Policy engine** | Allow/deny/approval rules on server, tool and arguments (path globs are normalised, so `./sandbox/../../etc` can't escape; nested and list values are checked too). Applies to tool calls, resource reads (as tool `read_resource`, argument `uri`) and prompts. Rate limits survive hot reloads; an invalid edit keeps the previous policy | allow all |
 | **Tool poisoning** | Scans tool *and parameter* descriptions for injected instructions, exfiltration requests, cross-tool shadowing and invisible Unicode. Poisoned tools are hidden and refused | hide |
 | **Rug-pull detection** | Pins a hash of every tool definition. A changed definition is re-scanned and needs one human approval before use | require approval |
-| **Result scanning** | Flags injected instructions and markdown-image exfiltration in tool output; appends a "treat as data" warning, or blocks | warn |
-| **Argument scanning** | Path traversal, sensitive files (`~/.ssh`, `.env`), shell injection, exfiltration endpoints | block high-severity |
-| **Redaction** | Masks API keys (AWS, GitHub, OpenAI, Anthropic, Slack, Google, Stripe), JWTs, private keys, passwords, emails and phone numbers in tool results, resource reads and prompts, *and* in the audit | on |
-| **Human approval** | Destructive tools (by rule, or the upstream's `destructiveHint`, which can only tighten) need a yes from the user. 2026-07-28 clients use multi-round-trip with sealed, expiring state; legacy clients get a live prompt | 5 min expiry |
+| **Result scanning** | Flags injected instructions and markdown-image exfiltration in everything the model reads: text, structured content, embedded resources, error results, resource reads and prompts. Appends a "treat as data" warning, or blocks | warn |
+| **Argument scanning** | Path traversal and sensitive files (`~/.ssh`, `.env`) on path-like values, shell injection on command-like values, exfiltration endpoints anywhere. Markdown and code in a text field pass. Resource URIs and prompt arguments are scanned too | block high-severity |
+| **Redaction** | Masks API keys (AWS, GitHub, OpenAI, Anthropic, Slack, Google, Stripe), JWTs, private keys, passwords, emails and phone-shaped numbers (not IPs or order numbers) in tool results, resource reads and prompts, *and* in the audit | on |
+| **Human approval** | Destructive tools (by rule, or the upstream's `destructiveHint`, which can only tighten) need a yes from the user. 2026-07-28 clients use multi-round-trip with sealed, expiring, single-use state (a replayed approval is refused); legacy clients get a live prompt | 5 min expiry |
 | **Context budget** | Warns about, or truncates, tool outputs over a token budget | warn at 4,000 |
 
-Scanner quality on the bundled fixtures (`tests/fixtures/`): **12 / 12 attacks caught, 0 / 50 benign samples flagged.**
+On the bundled fixtures (`tests/fixtures/`) the scanner catches 12 / 12 attacks and flags 0 / 50 benign samples. The rules were written against those fixtures, so that is a regression check, not a measure of real-world recall: rewordings ("set aside what you were told"), other languages and character swaps (`Ign0re`) get past regex rules. Shield's other layers (policy, approvals, pinning, redaction) don't depend on catching the wording.
 
 ## Audit dashboard
 

@@ -13,10 +13,12 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 import anyio
@@ -287,7 +289,7 @@ class UpstreamPool:
                 return up.id
         for up in self.upstreams.values():
             for tpl in up.templates:
-                if uri.startswith(tpl.uri_template.split("{", 1)[0]):
+                if template_regex(tpl.uri_template).fullmatch(uri):
                     return up.id
         return None
 
@@ -360,3 +362,37 @@ def _describe(e: BaseException) -> str:
     if isinstance(e, BaseExceptionGroup) and e.exceptions:
         return _describe(e.exceptions[0])
     return f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+
+
+_SEGMENT = r"[^/?#,]+"
+_EXPANSIONS = {  # RFC 6570 operator -> (prefix, one value, separator for lists/explode)
+    "": ("", _SEGMENT, ","),
+    "+": ("", r"[^?#]+", ","),
+    "#": ("#", r".+", ","),
+    ".": (r"\.", r"[^/?#.,]+", r"\."),
+    "/": ("/", _SEGMENT, "/"),
+    ";": (";", r"[^/?#;]+", ";"),
+    "?": (r"\?", r"[^#&]+", "&"),
+    "&": ("&", r"[^#&]+", "&"),
+}
+
+
+@lru_cache(maxsize=512)
+def template_regex(template: str) -> re.Pattern[str]:
+    """A regex for the URIs an RFC 6570 template can produce. A plain ``{path}`` matches one
+    segment (no ``/``), as simple expansion percent-encodes ``/``; ``{+path}`` or ``{/path*}``
+    are how a template opts in to multi-segment values. Unknown syntax matches nothing extra."""
+    out, pos = [], 0
+    for m in re.finditer(r"\{([^}]*)\}", template):
+        out.append(re.escape(template[pos : m.start()]))
+        expr = m.group(1)
+        op = expr[0] if expr[:1] in _EXPANSIONS and expr[:1] != "" else ""
+        names = expr[len(op) :].split(",")
+        prefix, value, sep = _EXPANSIONS[op]
+        exploded = any(n.endswith("*") for n in names)
+        many = len(names) > 1 or exploded
+        body = f"{value}(?:{sep}{value})*" if many else value
+        out.append(f"(?:{prefix}{body})?" if op in ("?", "&", "#", ";") else f"{prefix}{body}")
+        pos = m.end()
+    out.append(re.escape(template[pos:]))
+    return re.compile("".join(out))

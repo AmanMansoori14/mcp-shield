@@ -220,3 +220,20 @@ A full check of the code against the PRD. Fixed items carry their test.
 - [x] Each row has a test plan and a smoke example.
 - [x] Acceptance criteria are measurable.
 - [x] Tasks are grouped only for order.
+
+## External review fixes (2026-11-23)
+
+An external review reported 8 findings; all were reproduced against the running gateway before fixing. Attack tests: `tests/integration/test_review_fixes.py`.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | One approval could be replayed (same sealed `request_state` ran the call 3 times) | Approvals are single-use: the logical call id is remembered until expiry; reuse is `denied` with `approval.replayed` |
+| 2 | `resources/read` and `prompts/get` skipped policy, argument and result checks; template routing used a prefix match | Reads and prompts go through policy (as `read_resource` + `uri`, or the prompt name), argument scan (decoded URI, prompt args) and result scan; URIs must fully match an RFC 6570 template |
+| 3 | Upstream results marked `is_error` skipped the injection scan | Skip only Shield's own denials (`ctx.verdict` in `STOPPING`) |
+| 4 | Argument rules blocked markdown and code (`` `parse_config` ``, `.env.example`) | Path rules on path-like values (name, schema `format`, or path shape), shell rules on command-like values (name or tool), exfil endpoints anywhere |
+| 5 | Phone regex masked IPs and order numbers | Phone-shaped numbers only |
+| 6 | README presented 12/12 on in-distribution fixtures as quality | README states it is a regression check and lists known bypasses (adversarial set still open) |
+| 7 | `structuredContent` and embedded resources were not scanned | Every string the model reads is scanned |
+| 8 | Nested/list args slipped past glob rules; approval leg 2 spent rate-limit budget; limits reset on reload; `fail_open` and `scanner.classifier` did nothing | Policy checks every value of the argument; leg 2 doesn't count; windows carry over on reload; the two settings were removed |
+
+Still open from the review: an adversarial evaluation set with honest recall, `docs/THREAT_MODEL.md`, hiding policy-denied tools from `tools/list`, evicting idle connection groups, a latency benchmark, and documenting that `shield_*` audit tools show every client's data.

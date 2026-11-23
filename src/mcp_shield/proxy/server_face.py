@@ -19,6 +19,7 @@ import logging
 import time
 import weakref
 from typing import Any
+from urllib.parse import unquote
 
 from mcp import MCPError, types
 from mcp.server import Server, ServerRequestContext
@@ -319,19 +320,28 @@ def build_server(
         rctx = new_ctx(ctx, "resources/read", params)
         owner = pool.resource_owner(uri)
         rctx.server_id = owner
+        # Policy rules see a read as the tool ``read_resource`` with argument ``uri``; the argument
+        # scanner sees the decoded URI as a path-like value (traversal, sensitive files).
+        rctx.upstream_tool, rctx.tool = "read_resource", uri
+        rctx.screen_args = {"uri": unquote(uri)}
         up = pool.get(owner) if owner else None
 
         async def run() -> types.ReadResourceResult:
+            await pipeline.screen(rctx)  # first, so an attack on an unknown URI is still a security event
             if up is None or up.client is None:
                 raise MCPError(INVALID_PARAMS, f"Resource not found: {uri}", {"uri": uri})
             res = await up.client.read_resource(uri)
-            if redactor is None:
-                return res
-            res, found = redactor.redact_resource(res)  # secrets never reach the model (gap #9)
-            for f in found:
-                rctx.add_finding(f)
-            if found:
-                rctx.escalate("warn")
+            texts = [c.text for c in res.contents if isinstance(c, types.TextResourceContents)]
+            notice = pipeline.scan_read(rctx, texts)
+            if redactor is not None:
+                res, found = redactor.redact_resource(res)  # secrets never reach the model (gap #9)
+                for f in found:
+                    rctx.add_finding(f)
+                if found:
+                    rctx.escalate("warn")
+            if notice:
+                warning = types.TextResourceContents(uri=uri, mime_type="text/plain", text=notice)
+                res = res.model_copy(update={"contents": [*res.contents, warning]})
             return res
 
         async def measure(result: types.ReadResourceResult) -> TokenUsage:
@@ -365,18 +375,28 @@ def build_server(
         parts = router.split(params.name)
         up = pool.get(parts[0]) if parts else None
         rctx.server_id = parts[0] if parts else None
+        # Policy rules match a prompt by its name, like a tool; its arguments are scanned like tool arguments.
+        rctx.tool, rctx.upstream_tool = params.name, parts[1] if parts else None
+        rctx.screen_args = dict(params.arguments or {})
 
         async def run() -> types.GetPromptResult:
             if parts is None or up is None or up.client is None or parts[1] not in up.prompts:
                 raise MCPError(INVALID_PARAMS, f"Unknown prompt: {params.name}")
+            await pipeline.screen(rctx)
             res = await up.client.get_prompt(parts[1], params.arguments)
-            if redactor is None:
-                return res
-            res, found = redactor.redact_prompt(res)
-            for f in found:
-                rctx.add_finding(f)
-            if found:
-                rctx.escalate("warn")
+            texts = [str(t) for m in res.messages for t in _message_texts(m.content)]
+            notice = pipeline.scan_read(rctx, texts)
+            if redactor is not None:
+                res, found = redactor.redact_prompt(res)
+                for f in found:
+                    rctx.add_finding(f)
+                if found:
+                    rctx.escalate("warn")
+            if notice:
+                warning = types.PromptMessage(
+                    role="user", content=types.TextContent(type="text", text=notice)
+                )
+                res = res.model_copy(update={"messages": [*res.messages, warning]})
             return res
 
         async def measure(result: types.GetPromptResult) -> TokenUsage:
@@ -499,3 +519,14 @@ def _client_info(ctx: ServerRequestContext[Any]) -> tuple[str | None, str | None
     if isinstance(info, dict):
         return info.get("name"), info.get("version")
     return getattr(info, "name", None), getattr(info, "version", None)
+
+
+def _message_texts(content: Any) -> list[str]:
+    """Text a prompt message carries: a text block or an embedded text resource."""
+    if isinstance(content, types.TextContent):
+        return [content.text]
+    if isinstance(content, types.EmbeddedResource) and isinstance(
+        content.resource, types.TextResourceContents
+    ):
+        return [content.resource.text]
+    return []

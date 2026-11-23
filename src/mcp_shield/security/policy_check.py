@@ -167,7 +167,7 @@ def run_cases(policy: PolicyFile, cases: list[Case], scanner: Scanner | None = N
             decision = engine.evaluate(
                 case.server, case.tool, case.arguments, destructive_hint=case.destructive_hint
             )
-        scan = scanner.scan_arguments(case.arguments) if args_action != "off" else None
+        scan = scanner.scan_arguments(case.arguments, tool=case.tool) if args_action != "off" else None
         rules = tuple(sorted({f.rule_id for f in scan.findings})) if scan else ()
         blocks = scan is not None and args_action == "block" and scan.worst in ("high", "critical")
         outcome: Outcome = "deny" if blocks or decision.action == "deny" else decision.action

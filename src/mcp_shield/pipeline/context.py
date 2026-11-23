@@ -10,6 +10,9 @@ from typing import Any
 
 from mcp_shield.audit.models import ConnectionRecord, Finding, new_id, worst
 
+# Verdicts after which Shield answers with its own denial instead of the upstream's result.
+STOPPING = frozenset({"block", "denied", "expired", "approval_pending", "error"})
+
 
 @dataclass
 class RequestContext:
@@ -34,8 +37,18 @@ class RequestContext:
     input_schema: dict[str, Any] | None = None
     destructive_hint: bool | None = None
     needs_approval: bool = False
+    screen_args: dict[str, Any] | None = None  # what policy and argument rules see, when not params.arguments
     approval_reason: str | None = None
     t0: float = field(default_factory=time.perf_counter)
+
+    @property
+    def arguments(self) -> dict[str, Any] | None:
+        """The arguments the policy and argument scanner check: a tool call's arguments, a prompt's
+        arguments, or ``{"uri": ...}`` for a resource read."""
+        if self.screen_args is not None:
+            return self.screen_args
+        args = (self.params or {}).get("arguments")
+        return args if isinstance(args, dict) else None
 
     def require_approval(self, reason: str) -> None:
         if not self.needs_approval:

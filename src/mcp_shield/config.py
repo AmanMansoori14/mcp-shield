@@ -108,13 +108,8 @@ class ServersFile(_Strict):
 
 
 class PolicyDefaults(_Strict):
+    # Shield is always fail-closed: an internal error blocks the call (there is no fail_open).
     action: Literal["allow", "deny"] = "allow"
-    fail_open: bool = False
-
-
-class ClassifierSettings(_Strict):
-    enabled: bool = False
-    threshold: float = Field(default=0.85, gt=0, le=1)
 
 
 def _yaml_off(value: Any) -> Any:
@@ -132,7 +127,6 @@ class ScannerSettings(_Strict):
     description_action: Literal["warn", "block"] = "block"  # block = hide the tool
     result_action: OffAction = "warn"
     args_action: OffAction = "block"
-    classifier: ClassifierSettings = Field(default_factory=ClassifierSettings)
 
 
 class ContextBudget(_Strict):
